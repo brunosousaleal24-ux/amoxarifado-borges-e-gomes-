@@ -1,6 +1,7 @@
 import express from 'express';
 import http from 'http';
 import path from 'path';
+import crypto from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createViteServer } from 'vite';
 import { 
@@ -10,14 +11,90 @@ import {
   ConnectedOperator, 
   RealtimeServerState,
   WSServerMessage,
-  StockStatus
+  StockStatus,
+  Employee,
+  SystemUser,
+  UserRole
 } from './src/types.ts';
+import {
+  initDatabase,
+  getAllItems,
+  getItemById,
+  getItemByBarcodeOrSku,
+  createItem,
+  updateItem,
+  updateStockQuantity,
+  deleteItem,
+  getAllMovements,
+  addMovement,
+  getAllRequisitions,
+  getRequisitionById,
+  addRequisition,
+  updateRequisition,
+  getAllEmployees,
+  getEmployeeById,
+  addEmployee,
+  updateEmployee,
+  deleteEmployee,
+  getDatabaseInfo,
+  getAllUsers,
+  getUserById,
+  getUserByUsername,
+  verifyUserPassword,
+  updateUserLastLogin,
+  createUser,
+  updateUser,
+  deleteUser
+} from './server/db.ts';
+
+// Initialize SQLite database and tables
+initDatabase();
 
 const app = express();
 const PORT = 3000;
 const server = http.createServer(app);
 
 app.use(express.json());
+
+// In-memory active session tokens: token -> { user: SystemUser; expiresAt: number }
+const activeSessions = new Map<string, { user: SystemUser; expiresAt: number }>();
+
+function generateToken(): string {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Autenticação necessária. Faça login para continuar.' });
+  }
+
+  const token = authHeader.substring(7);
+  const session = activeSessions.get(token);
+
+  if (!session) {
+    return res.status(401).json({ error: 'Sessão expirada ou inválida. Faça login novamente.' });
+  }
+
+  const freshUser = getUserById(session.user.id);
+  if (!freshUser || freshUser.status !== 'ATIVO') {
+    activeSessions.delete(token);
+    return res.status(401).json({ error: 'Conta de usuário desativada ou não encontrada.' });
+  }
+
+  session.user = freshUser;
+  (req as any).user = freshUser;
+  (req as any).authToken = token;
+  next();
+}
+
+function adminOnlyMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const user = (req as any).user as SystemUser;
+  if (!user || user.role !== 'ADMIN') {
+    return res.status(403).json({ error: 'Acesso negado. Apenas o Administrador possui acesso total a esta área.' });
+  }
+  next();
+}
 
 // Helper function to calculate stock status
 function calculateStatus(current: number, min: number): StockStatus {
@@ -27,483 +104,15 @@ function calculateStatus(current: number, min: number): StockStatus {
   return 'ok';
 }
 
-// Initial realistic warehouse stock items
-let items: InventoryItem[] = [
-  {
-    id: 'itm-01',
-    sku: 'EPI-101',
-    name: 'Capacete de Segurança com Jugular e Carneira',
-    category: 'EPI & Segurança',
-    unit: 'un',
-    currentStock: 48,
-    minStock: 20,
-    maxStock: 100,
-    reorderPoint: 25,
-    location: { aisle: 'A', shelf: '01', bin: 'CX-04' },
-    unitCost: 38.50,
-    barcode: '7891000101001',
-    lastUpdated: new Date(Date.now() - 3600000 * 2).toISOString(),
-    status: 'ok',
-    supplier: 'MSA do Brasil Ltda',
-    description: 'Capacete aba frontal classe B com suspensão catraca regulável e fita jugular'
-  },
-  {
-    id: 'itm-02',
-    sku: 'EPI-104',
-    name: 'Óculos de Proteção Antirrisco e Anti-embaçante',
-    category: 'EPI & Segurança',
-    unit: 'un',
-    currentStock: 12,
-    minStock: 25,
-    maxStock: 80,
-    reorderPoint: 30,
-    location: { aisle: 'A', shelf: '01', bin: 'CX-08' },
-    unitCost: 14.20,
-    barcode: '7891000104002',
-    lastUpdated: new Date(Date.now() - 3600000 * 5).toISOString(),
-    status: 'critico',
-    supplier: '3M Segurança Industrial',
-    description: 'Óculos com lente de policarbonato incolor com proteção UVA/UVB'
-  },
-  {
-    id: 'itm-03',
-    sku: 'EPI-108',
-    name: 'Luva de Vaqueta Mista Cano Curto Tam G',
-    category: 'EPI & Segurança',
-    unit: 'par',
-    currentStock: 18,
-    minStock: 20,
-    maxStock: 60,
-    reorderPoint: 25,
-    location: { aisle: 'A', shelf: '02', bin: 'CX-12' },
-    unitCost: 22.90,
-    barcode: '7891000108003',
-    lastUpdated: new Date(Date.now() - 3600000 * 8).toISOString(),
-    status: 'baixo',
-    supplier: 'Danny EPIs',
-    description: 'Luva de couro vaqueta na palma e raspa no dorso com reforço interno'
-  },
-  {
-    id: 'itm-04',
-    sku: 'FER-201',
-    name: 'Furadeira e Parafusadeira de Impacto 18V Bateria',
-    category: 'Ferramentas',
-    unit: 'un',
-    currentStock: 6,
-    minStock: 4,
-    maxStock: 12,
-    reorderPoint: 5,
-    location: { aisle: 'B', shelf: '01', bin: 'BX-01' },
-    unitCost: 650.00,
-    barcode: '7892000201004',
-    lastUpdated: new Date(Date.now() - 3600000 * 12).toISOString(),
-    status: 'ok',
-    supplier: 'DeWalt Brasil',
-    description: 'Kit completo com 2 baterias de 2.0Ah, carregador rápido bivolt e maleta'
-  },
-  {
-    id: 'itm-05',
-    sku: 'FER-208',
-    name: 'Jogo de Chaves Combinadas 6 a 22mm (12 Peças)',
-    category: 'Ferramentas',
-    unit: 'conj',
-    currentStock: 5,
-    minStock: 6,
-    maxStock: 15,
-    reorderPoint: 8,
-    location: { aisle: 'B', shelf: '02', bin: 'BX-05' },
-    unitCost: 185.00,
-    barcode: '7892000208005',
-    lastUpdated: new Date(Date.now() - 3600000 * 24).toISOString(),
-    status: 'baixo',
-    supplier: 'Gedore Brasil',
-    description: 'Aço cromo vanádio com acabamento niquelado e cromado fosco'
-  },
-  {
-    id: 'itm-06',
-    sku: 'ELT-301',
-    name: 'Cabo Flexível 2,5mm² 750V Antichama Rolo 100m Azul',
-    category: 'Material Elétrico',
-    unit: 'rolo',
-    currentStock: 22,
-    minStock: 10,
-    maxStock: 50,
-    reorderPoint: 15,
-    location: { aisle: 'C', shelf: '01', bin: 'RL-02' },
-    unitCost: 195.00,
-    barcode: '7893000301006',
-    lastUpdated: new Date(Date.now() - 3600000 * 3).toISOString(),
-    status: 'ok',
-    supplier: 'Prysmian Cabos',
-    description: 'Cabo unipolar de cobre eletrolítico têmpera mole para instalações elétricas'
-  },
-  {
-    id: 'itm-07',
-    sku: 'ELT-309',
-    name: 'Disjuntor Bipolar Din 32A Curva C 3kA',
-    category: 'Material Elétrico',
-    unit: 'un',
-    currentStock: 34,
-    minStock: 15,
-    maxStock: 70,
-    reorderPoint: 20,
-    location: { aisle: 'C', shelf: '02', bin: 'CX-19' },
-    unitCost: 28.90,
-    barcode: '7893000309007',
-    lastUpdated: new Date(Date.now() - 3600000 * 18).toISOString(),
-    status: 'ok',
-    supplier: 'Schneider Electric',
-    description: 'Mini disjuntor termomagnético trilho DIN padrão IEC'
-  },
-  {
-    id: 'itm-08',
-    sku: 'HID-401',
-    name: 'Tubo Soldável PVC 25mm 3/4" Barra 6m Marrom',
-    category: 'Hidráulica & Tubos',
-    unit: 'un',
-    currentStock: 4,
-    minStock: 12,
-    maxStock: 40,
-    reorderPoint: 15,
-    location: { aisle: 'D', shelf: '01', bin: 'TB-01' },
-    unitCost: 26.50,
-    barcode: '7894000401008',
-    lastUpdated: new Date(Date.now() - 3600000 * 1).toISOString(),
-    status: 'critico',
-    supplier: 'Tigre Tubos e Conexões',
-    description: 'Tubo de PVC para condução de água fria predial'
-  },
-  {
-    id: 'itm-09',
-    sku: 'FIX-502',
-    name: 'Parafuso Autoatarraxante Inox Cabeça Panela 4,2 x 25mm',
-    category: 'Fixação & Parafusos',
-    unit: 'cx',
-    currentStock: 15,
-    minStock: 8,
-    maxStock: 30,
-    reorderPoint: 10,
-    location: { aisle: 'E', shelf: '01', bin: 'GV-03' },
-    unitCost: 45.00,
-    barcode: '7895000502009',
-    lastUpdated: new Date(Date.now() - 3600000 * 30).toISOString(),
-    status: 'ok',
-    supplier: 'Ciser Parafusos',
-    description: 'Caixa com 200 unidades em aço inoxidável 304 fenda Philips'
-  },
-  {
-    id: 'itm-10',
-    sku: 'QUI-601',
-    name: 'Desengripante e Lubrificante Spray WD-40 300ml',
-    category: 'Químicos & Lubrificantes',
-    unit: 'un',
-    currentStock: 0,
-    minStock: 10,
-    maxStock: 36,
-    reorderPoint: 12,
-    location: { aisle: 'F', shelf: '01', bin: 'PR-02' },
-    unitCost: 32.00,
-    barcode: '7896000601010',
-    lastUpdated: new Date(Date.now() - 3600000 * 6).toISOString(),
-    status: 'zerado',
-    supplier: 'WD-40 Company',
-    description: 'Spray multiuso para proteção contra umidade, ferrugem e corrosão'
-  },
-  {
-    id: 'itm-11',
-    sku: 'QUI-605',
-    name: 'Graxa Azul para Rolamentos de Alta Rotação Balde 1kg',
-    category: 'Químicos & Lubrificantes',
-    unit: 'un',
-    currentStock: 9,
-    minStock: 6,
-    maxStock: 20,
-    reorderPoint: 8,
-    location: { aisle: 'F', shelf: '02', bin: 'PR-06' },
-    unitCost: 68.00,
-    barcode: '7896000605011',
-    lastUpdated: new Date(Date.now() - 3600000 * 15).toISOString(),
-    status: 'ok',
-    supplier: 'Ipiranga Lubrificantes',
-    description: 'Graxa à base de sabão de lítio aditivada para rolamentos industriais'
-  },
-  {
-    id: 'itm-12',
-    sku: 'PEC-701',
-    name: 'Rolamento Rígido de Esferas 6205-2RS C3',
-    category: 'Peças & Rolamentos',
-    unit: 'un',
-    currentStock: 14,
-    minStock: 10,
-    maxStock: 40,
-    reorderPoint: 15,
-    location: { aisle: 'E', shelf: '02', bin: 'GV-11' },
-    unitCost: 42.00,
-    barcode: '7897000701012',
-    lastUpdated: new Date(Date.now() - 3600000 * 4).toISOString(),
-    status: 'ok',
-    supplier: 'SKF do Brasil',
-    description: 'Rolamento com blindagem dupla de borracha 25x52x15mm folga radial C3'
-  }
-];
-
-// Initial stock movements history
-let movements: StockMovement[] = [
-  {
-    id: 'mov-1001',
-    itemId: 'itm-10',
-    itemSku: 'QUI-601',
-    itemName: 'Desengripante e Lubrificante Spray WD-40 300ml',
-    category: 'Químicos & Lubrificantes',
-    type: 'SAIDA',
-    quantity: 4,
-    unit: 'un',
-    previousStock: 4,
-    newStock: 0,
-    reason: 'Manutenção Geral - Torno Mecânico 03',
-    recipient: 'Marcos Souza (Oficina Mecânica)',
-    operator: 'Carlos Eduardo',
-    operatorRole: 'Almoxarife Chefe',
-    timestamp: new Date(Date.now() - 3600000 * 6).toISOString(),
-    unitCost: 32.00,
-    totalCost: 128.00,
-    notes: 'Zerou estoque físico. Solicitada compra emergencial.'
-  },
-  {
-    id: 'mov-1002',
-    itemId: 'itm-08',
-    itemSku: 'HID-401',
-    itemName: 'Tubo Soldável PVC 25mm 3/4" Barra 6m Marrom',
-    category: 'Hidráulica & Tubos',
-    type: 'SAIDA',
-    quantity: 8,
-    unit: 'un',
-    previousStock: 12,
-    newStock: 4,
-    reason: 'Reparo na Rede de Alimentação Bloco Administrativo',
-    recipient: 'José Antônio (Equipe Predial)',
-    operator: 'Carlos Eduardo',
-    operatorRole: 'Almoxarife Chefe',
-    timestamp: new Date(Date.now() - 3600000 * 3).toISOString(),
-    unitCost: 26.50,
-    totalCost: 212.00
-  },
-  {
-    id: 'mov-1003',
-    itemId: 'itm-06',
-    itemSku: 'ELT-301',
-    itemName: 'Cabo Flexível 2,5mm² 750V Antichama Rolo 100m Azul',
-    category: 'Material Elétrico',
-    type: 'ENTRADA',
-    quantity: 10,
-    unit: 'rolo',
-    previousStock: 12,
-    newStock: 22,
-    reason: 'Recebimento de Fornecedor - NF-e 448192',
-    recipient: 'Almoxarifado Central',
-    operator: 'Fernanda Lima',
-    operatorRole: 'Operadora de Almoxarifado',
-    timestamp: new Date(Date.now() - 3600000 * 1.5).toISOString(),
-    unitCost: 195.00,
-    totalCost: 1950.00,
-    notes: 'Conferido e etiquetado no corredor C'
-  },
-  {
-    id: 'mov-1004',
-    itemId: 'itm-04',
-    itemSku: 'FER-201',
-    itemName: 'Furadeira e Parafusadeira de Impacto 18V Bateria',
-    category: 'Ferramentas',
-    type: 'DEVOLUCAO',
-    quantity: 1,
-    unit: 'un',
-    previousStock: 5,
-    newStock: 6,
-    reason: 'Devolução de Cautela de Ferramenta #771',
-    recipient: 'Almoxarifado Central',
-    operator: 'Carlos Eduardo',
-    operatorRole: 'Almoxarife Chefe',
-    timestamp: new Date(Date.now() - 3600000 * 0.8).toISOString(),
-    unitCost: 650.00,
-    totalCost: 650.00,
-    notes: 'Equipamento conferido em perfeito estado de funcionamento com 2 baterias'
-  },
-  {
-    id: 'mov-1005',
-    itemId: 'itm-01',
-    itemSku: 'EPI-101',
-    itemName: 'Capacete de Segurança com Jugular e Carneira',
-    category: 'EPI & Segurança',
-    type: 'SAIDA',
-    quantity: 12,
-    unit: 'un',
-    previousStock: 60,
-    newStock: 48,
-    reason: 'Entrega de EPIs - Equipe de Obra Civil Bloco 4',
-    recipient: 'Eduardo Martins (Construção)',
-    operator: 'Fernanda Lima',
-    operatorRole: 'Operadora de Almoxarifado',
-    timestamp: new Date(Date.now() - 86400000 * 1 - 3600000 * 4).toISOString(),
-    unitCost: 38.50,
-    totalCost: 462.00
-  },
-  {
-    id: 'mov-1006',
-    itemId: 'itm-02',
-    itemSku: 'EPI-104',
-    itemName: 'Óculos de Proteção Antirrisco e Anti-embaçante',
-    category: 'EPI & Segurança',
-    type: 'SAIDA',
-    quantity: 15,
-    unit: 'un',
-    previousStock: 27,
-    newStock: 12,
-    reason: 'Substituição periódica SESMT',
-    recipient: 'Beatriz Castro (SESMT)',
-    operator: 'Carlos Eduardo',
-    operatorRole: 'Almoxarife Chefe',
-    timestamp: new Date(Date.now() - 86400000 * 1 - 3600000 * 7).toISOString(),
-    unitCost: 14.20,
-    totalCost: 213.00
-  },
-  {
-    id: 'mov-1007',
-    itemId: 'itm-07',
-    itemSku: 'ELT-309',
-    itemName: 'Disjuntor Termomagnético Bipolar Din 32A Curva C',
-    category: 'Material Elétrico',
-    type: 'ENTRADA',
-    quantity: 20,
-    unit: 'un',
-    previousStock: 18,
-    newStock: 38,
-    reason: 'Recebimento Fornecedor Schneider - NF 39182',
-    recipient: 'Almoxarifado Central',
-    operator: 'Fernanda Lima',
-    operatorRole: 'Operadora de Almoxarifado',
-    timestamp: new Date(Date.now() - 86400000 * 2 - 3600000 * 2).toISOString(),
-    unitCost: 45.90,
-    totalCost: 918.00
-  },
-  {
-    id: 'mov-1008',
-    itemId: 'itm-09',
-    itemSku: 'FIX-501',
-    itemName: 'Parafuso Sextavado Aço Zincado Grau 5 1/2" x 2" c/ Porca',
-    category: 'Fixação & Parafusos',
-    type: 'SAIDA',
-    quantity: 80,
-    unit: 'cx',
-    previousStock: 160,
-    newStock: 80,
-    reason: 'Montagem de Estruturas Metálicas Galpão 3',
-    recipient: 'Sandro Moreira (Caldeiraria)',
-    operator: 'Carlos Eduardo',
-    operatorRole: 'Almoxarife Chefe',
-    timestamp: new Date(Date.now() - 86400000 * 3 - 3600000 * 5).toISOString(),
-    unitCost: 1.85,
-    totalCost: 148.00
-  },
-  {
-    id: 'mov-1009',
-    itemId: 'itm-05',
-    itemSku: 'FER-208',
-    itemName: 'Chave Grifo Heavy Duty 18" para Tubos',
-    category: 'Ferramentas',
-    type: 'ENTRADA',
-    quantity: 4,
-    unit: 'un',
-    previousStock: 4,
-    newStock: 8,
-    reason: 'Compra de Ferramental para Equipe Hidráulica',
-    recipient: 'Almoxarifado Central',
-    operator: 'Fernanda Lima',
-    operatorRole: 'Operadora de Almoxarifado',
-    timestamp: new Date(Date.now() - 86400000 * 4 - 3600000 * 3).toISOString(),
-    unitCost: 148.00,
-    totalCost: 592.00
-  },
-  {
-    id: 'mov-1010',
-    itemId: 'itm-12',
-    itemSku: 'PEC-701',
-    itemName: 'Rolamento Rígido de Esferas 6205-2RS C3',
-    category: 'Peças & Rolamentos',
-    type: 'SAIDA',
-    quantity: 6,
-    unit: 'un',
-    previousStock: 20,
-    newStock: 14,
-    reason: 'Reforma de Motores Elétricos Linha 2',
-    recipient: 'Marcos Souza (Oficina Mecânica)',
-    operator: 'Carlos Eduardo',
-    operatorRole: 'Almoxarife Chefe',
-    timestamp: new Date(Date.now() - 86400000 * 5 - 3600000 * 6).toISOString(),
-    unitCost: 42.00,
-    totalCost: 252.00
-  },
-  {
-    id: 'mov-1011',
-    itemId: 'itm-11',
-    itemSku: 'QUI-605',
-    itemName: 'Graxa Azul para Rolamentos de Alta Rotação Balde 1kg',
-    category: 'Químicos & Lubrificantes',
-    type: 'ENTRADA',
-    quantity: 5,
-    unit: 'un',
-    previousStock: 4,
-    newStock: 9,
-    reason: 'Reposição Preventiva de Lubrificantes',
-    recipient: 'Almoxarifado Central',
-    operator: 'Fernanda Lima',
-    operatorRole: 'Operadora de Almoxarifado',
-    timestamp: new Date(Date.now() - 86400000 * 6 - 3600000 * 4).toISOString(),
-    unitCost: 68.00,
-    totalCost: 340.00
-  }
-];
-
-// Initial requisitions (balcão de atendimento e pedidos das equipes)
-let requisitions: Requisition[] = [
-  {
-    id: 'req-01',
-    code: 'REQ-2026-041',
-    requesterName: 'Roberto Mendes',
-    department: 'Manutenção Elétrica',
-    workOrder: 'OS-8821',
-    priority: 'URGENTE',
-    status: 'PENDENTE',
-    items: [
-      { itemId: 'itm-06', sku: 'ELT-301', name: 'Cabo Flexível 2,5mm² 750V Rolo 100m', quantity: 2, unit: 'rolo', availableStock: 22 },
-      { itemId: 'itm-07', sku: 'ELT-309', name: 'Disjuntor Bipolar Din 32A Curva C', quantity: 4, unit: 'un', availableStock: 34 }
-    ],
-    createdAt: new Date(Date.now() - 1800000).toISOString(),
-    updatedAt: new Date(Date.now() - 1800000).toISOString(),
-    notes: 'Troca urgente do painel do compressor auxiliar 02'
-  },
-  {
-    id: 'req-02',
-    code: 'REQ-2026-042',
-    requesterName: 'Beatriz Castro',
-    department: 'Segurança do Trabalho (SESMT)',
-    workOrder: 'INTEGRACAO-NOVOS-COLAB',
-    priority: 'NORMAL',
-    status: 'PENDENTE',
-    items: [
-      { itemId: 'itm-01', sku: 'EPI-101', name: 'Capacete de Segurança com Jugular', quantity: 5, unit: 'un', availableStock: 48 },
-      { itemId: 'itm-02', sku: 'EPI-104', name: 'Óculos de Proteção Antirrisco', quantity: 5, unit: 'un', availableStock: 12 },
-      { itemId: 'itm-03', sku: 'EPI-108', name: 'Luva de Vaqueta Mista Tam G', quantity: 5, unit: 'par', availableStock: 18 }
-    ],
-    createdAt: new Date(Date.now() - 3600000).toISOString(),
-    updatedAt: new Date(Date.now() - 3600000).toISOString(),
-    notes: 'Kit de integração para nova turma de montagem predial'
-  }
-];
-
 // Active operators presence tracker
 const activeClients = new Map<WebSocket, ConnectedOperator>();
 
 function getStats() {
+  const items = getAllItems();
+  const movements = getAllMovements(500);
+  const requisitions = getAllRequisitions();
+  const employees = getAllEmployees();
+
   const totalItems = items.length;
   const totalStockUnits = items.reduce((acc, it) => acc + it.currentStock, 0);
   const totalValuation = items.reduce((acc, it) => acc + (it.currentStock * it.unitCost), 0);
@@ -521,16 +130,19 @@ function getStats() {
     criticalAlertsCount,
     lowStockAlertsCount,
     movementsTodayCount,
-    pendingRequisitionsCount
+    pendingRequisitionsCount,
+    totalEmployeesCount: employees.length
   };
 }
 
 function getServerState(): RealtimeServerState {
   return {
-    items,
-    movements,
-    requisitions,
+    items: getAllItems(),
+    movements: getAllMovements(200),
+    requisitions: getAllRequisitions(),
+    employees: getAllEmployees(),
     operators: Array.from(activeClients.values()),
+    databaseInfo: getDatabaseInfo(),
     stats: getStats()
   };
 }
@@ -549,7 +161,7 @@ function broadcast(msg: WSServerMessage) {
 
 const DEFAULT_OPERATOR_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4'];
 
-wss.on('connection', (ws, req) => {
+wss.on('connection', (ws) => {
   const clientIndex = activeClients.size + 1;
   const initialOp: ConnectedOperator = {
     id: `op-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -583,6 +195,8 @@ wss.on('connection', (ws, req) => {
           current.name = data.payload.name || current.name;
           current.role = data.payload.role || current.role;
           current.color = data.payload.color || current.color;
+          current.username = data.payload.username || current.username;
+          current.isAdmin = data.payload.isAdmin !== undefined ? data.payload.isAdmin : (data.payload.role === 'ADMIN' || data.payload.role === 'Administrador');
           broadcast({
             type: 'OPERATORS_CHANGED',
             payload: Array.from(activeClients.values())
@@ -603,17 +217,224 @@ wss.on('connection', (ws, req) => {
   });
 });
 
+// ==========================================
+// AUTHENTICATION & USERS ENDPOINTS
+// ==========================================
+
+// Login endpoint
+app.post('/api/auth/login', (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Informe usuário e senha para acessar o almoxarifado.' });
+    }
+
+    const user = verifyUserPassword(username, password);
+    if (!user) {
+      return res.status(401).json({ error: 'Usuário ou senha incorretos, ou usuário bloqueado pelo administrador.' });
+    }
+
+    const token = generateToken();
+    const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000;
+    activeSessions.set(token, { user, expiresAt });
+    updateUserLastLogin(user.id);
+
+    res.json({
+      success: true,
+      token,
+      user
+    });
+  } catch (err: any) {
+    console.error('Erro no login:', err);
+    res.status(500).json({ error: 'Erro interno ao realizar autenticação.' });
+  }
+});
+
+// Current user profile
+app.get('/api/auth/me', authMiddleware, (req, res) => {
+  res.json({ user: (req as any).user });
+});
+
+// Logout endpoint
+app.post('/api/auth/logout', (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7);
+    activeSessions.delete(token);
+  }
+  res.json({ success: true });
+});
+
+// Change own password
+app.post('/api/auth/change-password', authMiddleware, (req, res) => {
+  try {
+    const user = (req as any).user as SystemUser;
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Informe a senha atual e a nova senha.' });
+    }
+
+    if (newPassword.length < 3) {
+      return res.status(400).json({ error: 'A nova senha deve possuir pelo menos 3 caracteres.' });
+    }
+
+    const verified = verifyUserPassword(user.username, currentPassword);
+    if (!verified) {
+      return res.status(400).json({ error: 'Senha atual incorreta.' });
+    }
+
+    updateUser(user.id, { password: newPassword });
+    res.json({ success: true, message: 'Senha atualizada com sucesso!' });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Erro ao alterar senha.' });
+  }
+});
+
+// USER MANAGEMENT (Full Admin Access)
+app.get('/api/users', authMiddleware, (req, res) => {
+  res.json(getAllUsers());
+});
+
+app.post('/api/users', authMiddleware, adminOnlyMiddleware, (req, res) => {
+  try {
+    const { username, password, name, role, department, email } = req.body;
+
+    if (!username || !password || !name || !role) {
+      return res.status(400).json({ error: 'Usuário, senha, nome completo e função/perfil são obrigatórios.' });
+    }
+
+    if (password.length < 3) {
+      return res.status(400).json({ error: 'A senha do usuário deve ter no mínimo 3 caracteres.' });
+    }
+
+    const existing = getUserByUsername(username);
+    if (existing) {
+      return res.status(400).json({ error: `O nome de usuário "${username}" já existe. Escolha outro.` });
+    }
+
+    const created = createUser({
+      username,
+      password,
+      name,
+      role: role as UserRole,
+      department,
+      email
+    });
+
+    res.status(201).json(created);
+  } catch (err: any) {
+    console.error('Erro ao cadastrar usuário:', err);
+    res.status(500).json({ error: 'Erro ao criar usuário no banco de dados.' });
+  }
+});
+
+app.put('/api/users/:id', authMiddleware, adminOnlyMiddleware, (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = getUserById(id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Usuário não encontrado.' });
+    }
+
+    const { name, role, department, email, status, password } = req.body;
+    const updated = updateUser(id, {
+      name,
+      role,
+      department,
+      email,
+      status,
+      password: password && password.trim() ? password.trim() : undefined
+    });
+
+    res.json(updated);
+  } catch (err: any) {
+    console.error('Erro ao atualizar usuário:', err);
+    res.status(500).json({ error: 'Erro ao atualizar dados do usuário.' });
+  }
+});
+
+app.delete('/api/users/:id', authMiddleware, adminOnlyMiddleware, (req, res) => {
+  try {
+    const { id } = req.params;
+    const currentUser = (req as any).user as SystemUser;
+
+    if (id === currentUser.id) {
+      return res.status(400).json({ error: 'O administrador não pode excluir a própria conta em uso.' });
+    }
+
+    const target = getUserById(id);
+    if (!target) {
+      return res.status(404).json({ error: 'Usuário não encontrado.' });
+    }
+
+    deleteUser(id);
+    res.json({ success: true, message: `Usuário ${target.name} removido com sucesso.` });
+  } catch (err: any) {
+    console.error('Erro ao excluir usuário:', err);
+    res.status(500).json({ error: 'Erro ao excluir usuário do banco de dados.' });
+  }
+});
+
+// Admin item deletion endpoint (Total Access)
+app.delete('/api/inventory/items/:id', authMiddleware, adminOnlyMiddleware, (req, res) => {
+  try {
+    const { id } = req.params;
+    const item = getItemById(id);
+    if (!item) {
+      return res.status(404).json({ error: 'Item não encontrado no almoxarifado.' });
+    }
+
+    deleteItem(id);
+
+    broadcast({
+      type: 'ALERT_BROADCAST',
+      payload: {
+        title: 'Item Removido',
+        message: `O item "${item.name}" (${item.sku}) foi excluído do catálogo pelo administrador.`,
+        type: 'warning'
+      }
+    });
+
+    res.json({ success: true, message: `Item "${item.name}" excluído pelo administrador.` });
+  } catch (err: any) {
+    console.error('Erro ao excluir item:', err);
+    res.status(500).json({ error: 'Erro ao excluir item do estoque.' });
+  }
+});
+
 // REST API ROUTES
 app.get('/api/inventory', (req, res) => {
   res.json(getServerState());
 });
 
 app.get('/api/movements', (req, res) => {
-  res.json(movements);
+  res.json(getAllMovements());
 });
 
 app.get('/api/requisitions', (req, res) => {
-  res.json(requisitions);
+  res.json(getAllRequisitions());
+});
+
+app.get('/api/employees', (req, res) => {
+  res.json(getAllEmployees());
+});
+
+app.get('/api/database/info', (req, res) => {
+  res.json(getDatabaseInfo());
+});
+
+// Barcode fast lookup endpoint
+app.get('/api/barcode/lookup', (req, res) => {
+  const code = req.query.code as string;
+  if (!code) {
+    return res.status(400).json({ error: 'Parâmetro code é obrigatório.' });
+  }
+  const item = getItemByBarcodeOrSku(code);
+  if (!item) {
+    return res.status(404).json({ error: 'Item não localizado pelo código informado.' });
+  }
+  res.json(item);
 });
 
 // POST a new inventory movement (ENTRADA, SAIDA, DEVOLUCAO, AJUSTE)
@@ -630,7 +451,7 @@ app.post('/api/inventory/movement', (req, res) => {
       return res.status(400).json({ error: 'A quantidade deve ser um número positivo maior que zero.' });
     }
 
-    const item = items.find(i => i.id === itemId || i.sku === itemId || i.barcode === itemId);
+    const item = getItemById(itemId) || getItemByBarcodeOrSku(itemId);
     if (!item) {
       return res.status(404).json({ error: 'Item não encontrado no almoxarifado.' });
     }
@@ -654,25 +475,28 @@ app.post('/api/inventory/movement', (req, res) => {
     }
 
     // Update item in database
-    item.currentStock = newStock;
-    item.lastUpdated = new Date().toISOString();
-    item.status = calculateStatus(item.currentStock, item.minStock);
     if (customUnitCost && Number(customUnitCost) > 0) {
       item.unitCost = Number(customUnitCost);
+      updateItem(item);
+    }
+    
+    const updatedItem = updateStockQuantity(item.id, newStock);
+    if (!updatedItem) {
+      return res.status(500).json({ error: 'Falha ao atualizar saldo no banco de dados.' });
     }
 
-    const unitCost = item.unitCost;
+    const unitCost = updatedItem.unitCost;
     const totalCost = unitCost * qty;
 
     const newMovement: StockMovement = {
       id: `mov-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      itemId: item.id,
-      itemSku: item.sku,
-      itemName: item.name,
-      category: item.category,
+      itemId: updatedItem.id,
+      itemSku: updatedItem.sku,
+      itemName: updatedItem.name,
+      category: updatedItem.category,
       type,
       quantity: qty,
-      unit: item.unit,
+      unit: updatedItem.unit,
       previousStock,
       newStock,
       reason: reason || (type === 'SAIDA' ? 'Saída avulsa' : type === 'ENTRADA' ? 'Entrada manual' : type === 'DEVOLUCAO' ? 'Devolução de material' : 'Ajuste de inventário'),
@@ -684,42 +508,42 @@ app.post('/api/inventory/movement', (req, res) => {
       notes
     };
 
-    movements.unshift(newMovement);
+    addMovement(newMovement);
 
     // Real-time broadcast to all clients
     broadcast({
       type: 'MOVEMENT_CREATED',
       payload: {
         movement: newMovement,
-        updatedItem: item
+        updatedItem
       }
     });
 
-    // If item reached critical or zero, broadcast alert
-    if (item.status === 'zerado') {
+    // Broadcast alerts if needed
+    if (updatedItem.status === 'zerado') {
       broadcast({
         type: 'ALERT_BROADCAST',
         payload: {
           title: 'Estoque Zerado!',
-          message: `O item "${item.name}" (${item.sku}) está totalmente ESGOTADO no almoxarifado!`,
+          message: `O item "${updatedItem.name}" (${updatedItem.sku}) está totalmente ESGOTADO no almoxarifado!`,
           type: 'error'
         }
       });
-    } else if (item.status === 'critico') {
+    } else if (updatedItem.status === 'critico') {
       broadcast({
         type: 'ALERT_BROADCAST',
         payload: {
           title: 'Alerta Crítico de Estoque',
-          message: `Item "${item.sku}" atingiu estoque crítico: ${item.currentStock} ${item.unit} (Mín: ${item.minStock}).`,
+          message: `Item "${updatedItem.sku}" atingiu estoque crítico: ${updatedItem.currentStock} ${updatedItem.unit} (Mín: ${updatedItem.minStock}).`,
           type: 'warning'
         }
       });
     }
 
-    res.json({ success: true, movement: newMovement, updatedItem: item });
+    res.json({ success: true, movement: newMovement, updatedItem });
   } catch (err: any) {
     console.error('Erro ao processar movimentação:', err);
-    res.status(500).json({ error: 'Falha interna ao registrar movimentação.' });
+    res.status(500).json({ error: 'Falha interna ao registrar movimentação no banco de dados.' });
   }
 });
 
@@ -732,9 +556,9 @@ app.post('/api/inventory/items', (req, res) => {
       return res.status(400).json({ error: 'SKU, Nome, Categoria e Unidade são obrigatórios.' });
     }
 
-    const existing = items.find(i => i.sku.toUpperCase() === sku.toUpperCase().trim());
+    const existing = getItemByBarcodeOrSku(sku);
     if (existing) {
-      return res.status(400).json({ error: `Já existe um item cadastrado com o SKU "${sku}".` });
+      return res.status(400).json({ error: `Já existe um item cadastrado com o SKU/Código "${sku}".` });
     }
 
     const stock = Number(currentStock) || 0;
@@ -766,7 +590,7 @@ app.post('/api/inventory/items', (req, res) => {
       description: description || ''
     };
 
-    items.unshift(newItem);
+    createItem(newItem);
 
     // Record an initial entrance movement if stock > 0
     if (stock > 0) {
@@ -789,7 +613,7 @@ app.post('/api/inventory/items', (req, res) => {
         totalCost: cost * stock,
         notes: 'Cadastro inicial do produto no sistema'
       };
-      movements.unshift(initMov);
+      addMovement(initMov);
     }
 
     broadcast({
@@ -799,7 +623,8 @@ app.post('/api/inventory/items', (req, res) => {
 
     res.status(201).json(newItem);
   } catch (err) {
-    res.status(500).json({ error: 'Erro ao cadastrar novo item.' });
+    console.error('Erro ao cadastrar item:', err);
+    res.status(500).json({ error: 'Erro ao cadastrar novo item no banco de dados.' });
   }
 });
 
@@ -807,12 +632,12 @@ app.post('/api/inventory/items', (req, res) => {
 app.put('/api/inventory/items/:id', (req, res) => {
   try {
     const { id } = req.params;
-    const item = items.find(i => i.id === id);
+    const item = getItemById(id);
     if (!item) {
       return res.status(404).json({ error: 'Item não encontrado.' });
     }
 
-    const { name, category, unit, minStock, maxStock, reorderPoint, location, unitCost, supplier, description } = req.body;
+    const { name, category, unit, minStock, maxStock, reorderPoint, location, unitCost, supplier, description, barcode } = req.body;
 
     if (name) item.name = name.trim();
     if (category) item.category = category;
@@ -824,18 +649,22 @@ app.put('/api/inventory/items/:id', (req, res) => {
     if (unitCost !== undefined) item.unitCost = Number(unitCost);
     if (supplier !== undefined) item.supplier = supplier;
     if (description !== undefined) item.description = description;
+    if (barcode) item.barcode = barcode.trim();
 
     item.status = calculateStatus(item.currentStock, item.minStock);
     item.lastUpdated = new Date().toISOString();
 
+    const saved = updateItem(item);
+
     broadcast({
       type: 'ITEM_UPDATED',
-      payload: item
+      payload: saved
     });
 
-    res.json(item);
+    res.json(saved);
   } catch (err) {
-    res.status(500).json({ error: 'Erro ao atualizar dados do item.' });
+    console.error('Erro ao atualizar item:', err);
+    res.status(500).json({ error: 'Erro ao atualizar dados do item no banco de dados.' });
   }
 });
 
@@ -848,8 +677,9 @@ app.post('/api/requisitions', (req, res) => {
       return res.status(400).json({ error: 'Dados incompletos. Solicitante, setor e itens são obrigatórios.' });
     }
 
+    const allItems = getAllItems();
     const preparedItems = reqItems.map((item: any) => {
-      const found = items.find(i => i.id === item.itemId || i.sku === item.itemId);
+      const found = allItems.find(i => i.id === item.itemId || i.sku === item.itemId);
       return {
         itemId: found ? found.id : item.itemId,
         sku: found ? found.sku : item.sku || 'N/A',
@@ -860,9 +690,10 @@ app.post('/api/requisitions', (req, res) => {
       };
     });
 
+    const existingReqs = getAllRequisitions();
     const newReq: Requisition = {
       id: `req-${Date.now()}`,
-      code: `REQ-${new Date().getFullYear()}-${String(requisitions.length + 43).padStart(3, '0')}`,
+      code: `REQ-${new Date().getFullYear()}-${String(existingReqs.length + 85).padStart(3, '0')}`,
       requesterName: requesterName.trim(),
       department: department.trim(),
       workOrder: workOrder?.trim() || undefined,
@@ -874,7 +705,7 @@ app.post('/api/requisitions', (req, res) => {
       notes: notes || undefined
     };
 
-    requisitions.unshift(newReq);
+    addRequisition(newReq);
 
     broadcast({
       type: 'REQUISITION_CREATED',
@@ -894,7 +725,8 @@ app.post('/api/requisitions', (req, res) => {
 
     res.status(201).json(newReq);
   } catch (err) {
-    res.status(500).json({ error: 'Erro ao criar requisição.' });
+    console.error('Erro ao criar requisição:', err);
+    res.status(500).json({ error: 'Erro ao criar requisição no banco de dados.' });
   }
 });
 
@@ -904,7 +736,7 @@ app.patch('/api/requisitions/:id/fulfill', (req, res) => {
     const { id } = req.params;
     const { operator } = req.body;
 
-    const requisition = requisitions.find(r => r.id === id);
+    const requisition = getRequisitionById(id);
     if (!requisition) {
       return res.status(404).json({ error: 'Requisição não encontrada.' });
     }
@@ -915,7 +747,7 @@ app.patch('/api/requisitions/:id/fulfill', (req, res) => {
 
     // Check if all items have enough stock
     for (const reqItem of requisition.items) {
-      const inventoryItem = items.find(i => i.id === reqItem.itemId);
+      const inventoryItem = getItemById(reqItem.itemId);
       if (!inventoryItem) {
         return res.status(400).json({ error: `Item ${reqItem.name} não localizado no inventário.` });
       }
@@ -931,39 +763,39 @@ app.patch('/api/requisitions/:id/fulfill', (req, res) => {
     const createdMovements: StockMovement[] = [];
 
     for (const reqItem of requisition.items) {
-      const inventoryItem = items.find(i => i.id === reqItem.itemId)!;
+      const inventoryItem = getItemById(reqItem.itemId)!;
       const prev = inventoryItem.currentStock;
-      inventoryItem.currentStock -= reqItem.quantity;
-      inventoryItem.status = calculateStatus(inventoryItem.currentStock, inventoryItem.minStock);
-      inventoryItem.lastUpdated = new Date().toISOString();
-      updatedItemsList.push(inventoryItem);
+      const newStock = prev - reqItem.quantity;
+      const updatedItem = updateStockQuantity(inventoryItem.id, newStock)!;
+      updatedItemsList.push(updatedItem);
 
       const mov: StockMovement = {
         id: `mov-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-        itemId: inventoryItem.id,
-        itemSku: inventoryItem.sku,
-        itemName: inventoryItem.name,
-        category: inventoryItem.category,
+        itemId: updatedItem.id,
+        itemSku: updatedItem.sku,
+        itemName: updatedItem.name,
+        category: updatedItem.category,
         type: 'SAIDA',
         quantity: reqItem.quantity,
-        unit: inventoryItem.unit,
+        unit: updatedItem.unit,
         previousStock: prev,
-        newStock: inventoryItem.currentStock,
+        newStock: updatedItem.currentStock,
         reason: `Atendimento ${requisition.code} (${requisition.workOrder || 'Sem OS'})`,
         recipient: `${requisition.requesterName} (${requisition.department})`,
         operator: operator || 'Almoxarife de Plantão',
         timestamp: new Date().toISOString(),
-        unitCost: inventoryItem.unitCost,
-        totalCost: inventoryItem.unitCost * reqItem.quantity,
+        unitCost: updatedItem.unitCost,
+        totalCost: updatedItem.unitCost * reqItem.quantity,
         notes: `Requisição aprovada e entregue no balcão`
       };
-      movements.unshift(mov);
+      addMovement(mov);
       createdMovements.push(mov);
     }
 
     requisition.status = 'ATENDIDA';
     requisition.attendedBy = operator || 'Almoxarife';
     requisition.updatedAt = new Date().toISOString();
+    updateRequisition(requisition);
 
     // Broadcast update
     broadcast({
@@ -988,7 +820,103 @@ app.patch('/api/requisitions/:id/fulfill', (req, res) => {
     res.json({ success: true, requisition, updatedItems: updatedItemsList });
   } catch (err) {
     console.error('Erro ao atender requisição:', err);
-    res.status(500).json({ error: 'Falha ao processar atendimento da requisição.' });
+    res.status(500).json({ error: 'Falha ao processar atendimento da requisição no banco de dados.' });
+  }
+});
+
+// EMPLOYEES CRUD API
+app.post('/api/employees', (req, res) => {
+  try {
+    const { name, registration, department, role, phone, email, status, notes } = req.body;
+
+    if (!name || !registration || !department || !role) {
+      return res.status(400).json({ error: 'Nome, Matrícula, Setor/Departamento e Cargo são obrigatórios.' });
+    }
+
+    const all = getAllEmployees();
+    const existing = all.find(e => e.registration.trim().toUpperCase() === registration.trim().toUpperCase());
+    if (existing) {
+      return res.status(400).json({ error: `Já existe um funcionário cadastrado com a matrícula "${registration}".` });
+    }
+
+    const newEmp: Employee = {
+      id: `emp-${Date.now()}`,
+      name: name.trim(),
+      registration: registration.trim().toUpperCase(),
+      department: department.trim(),
+      role: role.trim(),
+      phone: phone?.trim() || undefined,
+      email: email?.trim() || undefined,
+      status: status || 'ATIVO',
+      createdAt: new Date().toISOString(),
+      notes: notes?.trim() || undefined
+    };
+
+    addEmployee(newEmp);
+
+    broadcast({
+      type: 'EMPLOYEE_CREATED',
+      payload: newEmp
+    });
+
+    res.status(201).json(newEmp);
+  } catch (err) {
+    console.error('Erro ao cadastrar funcionário:', err);
+    res.status(500).json({ error: 'Erro ao registrar funcionário no banco de dados.' });
+  }
+});
+
+app.put('/api/employees/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = getEmployeeById(id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Funcionário não encontrado.' });
+    }
+
+    const { name, registration, department, role, phone, email, status, notes } = req.body;
+    if (name) existing.name = name.trim();
+    if (registration) existing.registration = registration.trim().toUpperCase();
+    if (department) existing.department = department.trim();
+    if (role) existing.role = role.trim();
+    if (phone !== undefined) existing.phone = phone?.trim() || undefined;
+    if (email !== undefined) existing.email = email?.trim() || undefined;
+    if (status) existing.status = status;
+    if (notes !== undefined) existing.notes = notes?.trim() || undefined;
+
+    const saved = updateEmployee(existing);
+
+    broadcast({
+      type: 'EMPLOYEE_UPDATED',
+      payload: saved
+    });
+
+    res.json(saved);
+  } catch (err) {
+    console.error('Erro ao atualizar funcionário:', err);
+    res.status(500).json({ error: 'Erro ao atualizar dados do funcionário no banco de dados.' });
+  }
+});
+
+app.delete('/api/employees/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = getEmployeeById(id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Funcionário não encontrado.' });
+    }
+
+    deleteEmployee(id);
+
+    broadcast({
+      type: 'EMPLOYEE_DELETED',
+      payload: id
+    });
+
+    res.json({ success: true, id });
+  } catch (err) {
+    console.error('Erro ao excluir funcionário:', err);
+    res.status(500).json({ error: 'Erro ao remover funcionário do banco de dados.' });
   }
 });
 
@@ -1010,6 +938,7 @@ async function start() {
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[Almoxarifado em Tempo Real] Servidor ativo em http://0.0.0.0:${PORT}`);
+    console.log(`[SQLite] Banco de dados persistente almoxarifado.db carregado com sucesso.`);
   });
 }
 

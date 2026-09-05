@@ -13,22 +13,30 @@ import {
   Barcode,
   History,
   Edit2,
-  ExternalLink
+  ExternalLink,
+  Trash2,
+  Crown
 } from 'lucide-react';
 import { InventoryItem, ItemCategory, StockStatus } from '../types.ts';
 
 interface InventoryTableProps {
   items: InventoryItem[];
+  isAdmin?: boolean;
+  isReadOnly?: boolean;
   onQuickMovement: (item: InventoryItem, defaultType: 'ENTRADA' | 'SAIDA') => void;
   onEditItem: (item: InventoryItem) => void;
   onViewItemHistory: (item: InventoryItem) => void;
+  onDeleteItem?: (item: InventoryItem) => void;
 }
 
 export const InventoryTable: React.FC<InventoryTableProps> = ({
   items,
+  isAdmin = false,
+  isReadOnly = false,
   onQuickMovement,
   onEditItem,
   onViewItemHistory,
+  onDeleteItem,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('TODAS');
@@ -320,45 +328,63 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({
                       <div className="inline-flex items-center gap-1.5">
                         
                         {/* Quick - Saída */}
-                        <button
-                          id={`btn-saida-${item.sku}`}
-                          onClick={() => onQuickMovement(item, 'SAIDA')}
-                          disabled={item.currentStock <= 0}
-                          className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/30 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-                          title="Dar baixa / Saída imediata"
-                        >
-                          <Minus className="w-4 h-4" />
-                        </button>
+                        {!isReadOnly && (
+                          <button
+                            id={`btn-saida-${item.sku}`}
+                            onClick={() => onQuickMovement(item, 'SAIDA')}
+                            disabled={item.currentStock <= 0}
+                            className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/30 disabled:opacity-30 disabled:cursor-not-allowed transition-all cursor-pointer"
+                            title="Dar baixa / Saída imediata"
+                          >
+                            <Minus className="w-4 h-4" />
+                          </button>
+                        )}
 
                         {/* Quick + Entrada */}
-                        <button
-                          id={`btn-entrada-${item.sku}`}
-                          onClick={() => onQuickMovement(item, 'ENTRADA')}
-                          className="p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 hover:text-emerald-300 border border-emerald-500/30 transition-all"
-                          title="Registrar entrada de material"
-                        >
-                          <Plus className="w-4 h-4" />
-                        </button>
+                        {!isReadOnly && (
+                          <button
+                            id={`btn-entrada-${item.sku}`}
+                            onClick={() => onQuickMovement(item, 'ENTRADA')}
+                            className="p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 hover:text-emerald-300 border border-emerald-500/30 transition-all cursor-pointer"
+                            title="Registrar entrada de material"
+                          >
+                            <Plus className="w-4 h-4" />
+                          </button>
+                        )}
 
                         {/* History */}
                         <button
                           id={`btn-history-${item.sku}`}
                           onClick={() => onViewItemHistory(item)}
-                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-all"
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-all cursor-pointer"
                           title="Histórico de movimentações deste item"
                         >
                           <History className="w-4 h-4" />
                         </button>
 
                         {/* Edit Item */}
-                        <button
-                          id={`btn-edit-${item.sku}`}
-                          onClick={() => onEditItem(item)}
-                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-all"
-                          title="Editar cadastro do item"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
+                        {!isReadOnly && (
+                          <button
+                            id={`btn-edit-${item.sku}`}
+                            onClick={() => onEditItem(item)}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-all cursor-pointer"
+                            title="Editar cadastro do item"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                        )}
+
+                        {/* Delete Item (Admin Only with Total Access) */}
+                        {isAdmin && onDeleteItem && (
+                          <button
+                            id={`btn-delete-${item.sku}`}
+                            onClick={() => onDeleteItem(item)}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-slate-700 hover:border-rose-500/40 transition-all cursor-pointer"
+                            title="Excluir item do catálogo (Acesso Total Administrador)"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
 
                       </div>
                     </td>

@@ -13,7 +13,10 @@ import {
   ArrowDownLeft,
   ArrowUpRight,
   ShieldCheck,
-  Package
+  Package,
+  Users,
+  FileSpreadsheet,
+  Database
 } from 'lucide-react';
 import { 
   InventoryItem, 
@@ -22,7 +25,9 @@ import {
   ConnectedOperator, 
   RealtimeServerState, 
   MovementType,
-  WSServerMessage 
+  WSServerMessage,
+  Employee,
+  DatabaseInfo
 } from './types.ts';
 import { socketManager } from './services/socket.ts';
 import * as api from './services/api.ts';
@@ -36,6 +41,7 @@ import { MovementsFeed } from './components/MovementsFeed.tsx';
 import { RequisitionsQueue } from './components/RequisitionsQueue.tsx';
 import { WarehouseMap } from './components/WarehouseMap.tsx';
 import { RestockAlerts } from './components/RestockAlerts.tsx';
+import { EmployeesManagement } from './components/EmployeesManagement.tsx';
 
 // Modals
 import { MovementModal } from './components/MovementModal.tsx';
@@ -44,6 +50,7 @@ import { NewRequisitionModal } from './components/NewRequisitionModal.tsx';
 import { BarcodeScannerModal } from './components/BarcodeScannerModal.tsx';
 import { OperatorProfileModal } from './components/OperatorProfileModal.tsx';
 import { ReceiptModal } from './components/ReceiptModal.tsx';
+import { ReportsModal } from './components/ReportsModal.tsx';
 
 interface LiveToast {
   id: string;
@@ -54,12 +61,14 @@ interface LiveToast {
 
 export default function App() {
   // Navigation tabs
-  const [activeTab, setActiveTab] = useState<'ESTOQUE' | 'FEED' | 'REQUISICOES' | 'MAPA' | 'ALERTAS'>('ESTOQUE');
+  const [activeTab, setActiveTab] = useState<'ESTOQUE' | 'FEED' | 'REQUISICOES' | 'MAPA' | 'ALERTAS' | 'FUNCIONARIOS'>('ESTOQUE');
 
-  // Real-time server state
+  // Real-time server state & database entities
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [movements, setMovements] = useState<StockMovement[]>([]);
   const [requisitions, setRequisitions] = useState<Requisition[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [databaseInfo, setDatabaseInfo] = useState<DatabaseInfo | undefined>(undefined);
   const [operators, setOperators] = useState<ConnectedOperator[]>([]);
   const [stats, setStats] = useState<RealtimeServerState['stats']>({
     totalItems: 0,
@@ -90,6 +99,7 @@ export default function App() {
 
   const [isRequisitionModalOpen, setIsRequisitionModalOpen] = useState(false);
   const [isScannerModalOpen, setIsScannerModalOpen] = useState(false);
+  const [isReportsModalOpen, setIsReportsModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
   const [receiptMovement, setReceiptMovement] = useState<StockMovement | null>(null);
@@ -127,11 +137,11 @@ export default function App() {
     });
   }, []);
 
-  // WebSocket lifecycle
+  // Initialize WebSockets and load initial database state
   useEffect(() => {
     socketManager.connect();
 
-    const unsubStatus = socketManager.subscribeStatus((status, latency) => {
+    const unsubStatus = socketManager.onStatusChange((status, latency) => {
       setConnectionStatus(status);
       setLatencyMs(latency);
     });
@@ -144,6 +154,12 @@ export default function App() {
           setRequisitions(msg.payload.requisitions);
           setOperators(msg.payload.operators);
           setStats(msg.payload.stats);
+          if (msg.payload.employees) {
+            setEmployees(msg.payload.employees);
+          }
+          if (msg.payload.database) {
+            setDatabaseInfo(msg.payload.database);
+          }
           break;
         }
 
@@ -230,6 +246,40 @@ export default function App() {
           break;
         }
 
+        case 'EMPLOYEE_CREATED': {
+          setEmployees((prev) => {
+            if (prev.some(e => e.id === msg.payload.id)) return prev;
+            return [msg.payload, ...prev];
+          });
+          addToast({
+            title: 'Funcionário Cadastrado',
+            message: `${msg.payload.name} (${msg.payload.department}) registrado.`,
+            type: 'success'
+          });
+          break;
+        }
+
+        case 'EMPLOYEE_UPDATED': {
+          setEmployees((prev) => prev.map(e => e.id === msg.payload.id ? msg.payload : e));
+          addToast({
+            title: 'Funcionário Atualizado',
+            message: `Registro de ${msg.payload.name} atualizado.`,
+            type: 'info'
+          });
+          break;
+        }
+
+        case 'EMPLOYEE_DELETED': {
+          const deletedId = typeof msg.payload === 'string' ? msg.payload : (msg.payload as any)?.id;
+          setEmployees((prev) => prev.filter(e => e.id !== deletedId));
+          addToast({
+            title: 'Funcionário Excluído',
+            message: 'Registro removido do banco de dados.',
+            type: 'warning'
+          });
+          break;
+        }
+
         case 'OPERATORS_CHANGED': {
           setOperators(msg.payload);
           break;
@@ -254,7 +304,21 @@ export default function App() {
         setRequisitions(data.requisitions);
         setOperators(data.operators);
         setStats(data.stats);
+        if (data.employees) {
+          setEmployees(data.employees);
+        }
+        if (data.database) {
+          setDatabaseInfo(data.database);
+        }
       })
+      .catch(() => {});
+
+    api.fetchEmployees()
+      .then(setEmployees)
+      .catch(() => {});
+
+    api.fetchDatabaseInfo()
+      .then(setDatabaseInfo)
       .catch(() => {});
 
     return () => {
@@ -322,6 +386,67 @@ export default function App() {
     setIsReceiptModalOpen(true);
   };
 
+  // Employee CRUD Actions
+  const handleAddEmployee = async (empData: Omit<Employee, 'id' | 'createdAt'>): Promise<boolean> => {
+    try {
+      const created = await api.createEmployee(empData);
+      setEmployees(prev => [created, ...prev.filter(e => e.id !== created.id)]);
+      addToast({
+        title: 'Funcionário Cadastrado',
+        message: `${created.name} (${created.department}) gravado no banco de dados SQLite.`,
+        type: 'success'
+      });
+      return true;
+    } catch (err: any) {
+      addToast({
+        title: 'Erro ao Cadastrar',
+        message: err.message || 'Falha ao cadastrar funcionário.',
+        type: 'error'
+      });
+      return false;
+    }
+  };
+
+  const handleUpdateEmployee = async (emp: Employee): Promise<boolean> => {
+    try {
+      const updated = await api.updateEmployee(emp.id, emp);
+      setEmployees(prev => prev.map(e => e.id === emp.id ? updated : e));
+      addToast({
+        title: 'Cadastro Atualizado',
+        message: `Dados de ${emp.name} atualizados com sucesso.`,
+        type: 'info'
+      });
+      return true;
+    } catch (err: any) {
+      addToast({
+        title: 'Erro ao Atualizar',
+        message: err.message || 'Falha ao atualizar dados.',
+        type: 'error'
+      });
+      return false;
+    }
+  };
+
+  const handleDeleteEmployee = async (id: string): Promise<boolean> => {
+    try {
+      await api.deleteEmployee(id);
+      setEmployees(prev => prev.filter(e => e.id !== id));
+      addToast({
+        title: 'Funcionário Excluído',
+        message: 'Cadastro removido com sucesso.',
+        type: 'warning'
+      });
+      return true;
+    } catch (err: any) {
+      addToast({
+        title: 'Erro ao Excluir',
+        message: err.message || 'Falha ao remover funcionário.',
+        type: 'error'
+      });
+      return false;
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-amber-500 selection:text-slate-950">
       
@@ -335,6 +460,7 @@ export default function App() {
         onOpenNewItemModal={handleOpenNewItem}
         onOpenRequisitionModal={() => setIsRequisitionModalOpen(true)}
         onOpenScannerModal={() => setIsScannerModalOpen(true)}
+        onOpenReportsModal={() => setIsReportsModalOpen(true)}
         onOpenProfileModal={() => setIsProfileModalOpen(true)}
         unreadAlertsCount={stats.criticalAlertsCount + stats.lowStockAlertsCount}
         onOpenAlertsTab={() => setActiveTab('ALERTAS')}
@@ -359,7 +485,7 @@ export default function App() {
             <button
               id="tab-inventory"
               onClick={() => setActiveTab('ESTOQUE')}
-              className={`flex items-center gap-2 px-3.5 py-2.5 border-b-2 font-bold text-xs sm:text-sm whitespace-nowrap transition-all ${
+              className={`flex items-center gap-2 px-3.5 py-2.5 border-b-2 font-bold text-xs sm:text-sm whitespace-nowrap transition-all cursor-pointer ${
                 activeTab === 'ESTOQUE'
                   ? 'border-amber-500 text-amber-400 bg-amber-500/5'
                   : 'border-transparent text-slate-400 hover:text-slate-200 hover:border-slate-700'
@@ -376,7 +502,7 @@ export default function App() {
             <button
               id="tab-feed"
               onClick={() => setActiveTab('FEED')}
-              className={`flex items-center gap-2 px-3.5 py-2.5 border-b-2 font-bold text-xs sm:text-sm whitespace-nowrap transition-all ${
+              className={`flex items-center gap-2 px-3.5 py-2.5 border-b-2 font-bold text-xs sm:text-sm whitespace-nowrap transition-all cursor-pointer ${
                 activeTab === 'FEED'
                   ? 'border-amber-500 text-amber-400 bg-amber-500/5'
                   : 'border-transparent text-slate-400 hover:text-slate-200 hover:border-slate-700'
@@ -394,7 +520,7 @@ export default function App() {
             <button
               id="tab-requisitions"
               onClick={() => setActiveTab('REQUISICOES')}
-              className={`flex items-center gap-2 px-3.5 py-2.5 border-b-2 font-bold text-xs sm:text-sm whitespace-nowrap transition-all ${
+              className={`flex items-center gap-2 px-3.5 py-2.5 border-b-2 font-bold text-xs sm:text-sm whitespace-nowrap transition-all cursor-pointer ${
                 activeTab === 'REQUISICOES'
                   ? 'border-amber-500 text-amber-400 bg-amber-500/5'
                   : 'border-transparent text-slate-400 hover:text-slate-200 hover:border-slate-700'
@@ -409,11 +535,28 @@ export default function App() {
               )}
             </button>
 
-            {/* Tab 4: Mapa do Galpão */}
+            {/* Tab 4: Funcionários (Employee Registration Tab requested by user) */}
+            <button
+              id="tab-employees"
+              onClick={() => setActiveTab('FUNCIONARIOS')}
+              className={`flex items-center gap-2 px-3.5 py-2.5 border-b-2 font-bold text-xs sm:text-sm whitespace-nowrap transition-all cursor-pointer ${
+                activeTab === 'FUNCIONARIOS'
+                  ? 'border-blue-500 text-blue-400 bg-blue-500/5'
+                  : 'border-transparent text-slate-400 hover:text-slate-200 hover:border-slate-700'
+              }`}
+            >
+              <Users className="w-4 h-4" />
+              <span>Funcionários</span>
+              <span className="ml-1 text-[11px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
+                {employees.length}
+              </span>
+            </button>
+
+            {/* Tab 5: Mapa do Galpão */}
             <button
               id="tab-map"
               onClick={() => setActiveTab('MAPA')}
-              className={`flex items-center gap-2 px-3.5 py-2.5 border-b-2 font-bold text-xs sm:text-sm whitespace-nowrap transition-all ${
+              className={`flex items-center gap-2 px-3.5 py-2.5 border-b-2 font-bold text-xs sm:text-sm whitespace-nowrap transition-all cursor-pointer ${
                 activeTab === 'MAPA'
                   ? 'border-amber-500 text-amber-400 bg-amber-500/5'
                   : 'border-transparent text-slate-400 hover:text-slate-200 hover:border-slate-700'
@@ -423,11 +566,11 @@ export default function App() {
               <span>Mapa do Galpão</span>
             </button>
 
-            {/* Tab 5: Alertas & Reposição */}
+            {/* Tab 6: Alertas & Reposição */}
             <button
               id="tab-alerts"
               onClick={() => setActiveTab('ALERTAS')}
-              className={`flex items-center gap-2 px-3.5 py-2.5 border-b-2 font-bold text-xs sm:text-sm whitespace-nowrap transition-all ${
+              className={`flex items-center gap-2 px-3.5 py-2.5 border-b-2 font-bold text-xs sm:text-sm whitespace-nowrap transition-all cursor-pointer ${
                 activeTab === 'ALERTAS'
                   ? 'border-rose-500 text-rose-400 bg-rose-500/5'
                   : 'border-transparent text-slate-400 hover:text-slate-200 hover:border-slate-700'
@@ -474,6 +617,21 @@ export default function App() {
               onFulfillRequisition={handleFulfillRequisition}
               onOpenNewRequisition={() => setIsRequisitionModalOpen(true)}
               isFulfillingId={isFulfillingReqId}
+            />
+          )}
+
+          {activeTab === 'FUNCIONARIOS' && (
+            <EmployeesManagement
+              employees={employees}
+              movements={movements}
+              onAddEmployee={handleAddEmployee}
+              onUpdateEmployee={handleUpdateEmployee}
+              onDeleteEmployee={handleDeleteEmployee}
+              onOpenMovementForEmployee={(employeeName) => {
+                setMovementModalItem(items[0] || null);
+                setMovementDefaultType('SAIDA');
+                setIsMovementModalOpen(true);
+              }}
             />
           )}
 
@@ -542,6 +700,7 @@ export default function App() {
         isOpen={isMovementModalOpen}
         onClose={() => setIsMovementModalOpen(false)}
         items={items}
+        employees={employees}
         preSelectedItem={movementModalItem}
         defaultType={movementDefaultType}
         currentOperator={currentProfile.name}
@@ -571,6 +730,7 @@ export default function App() {
         isOpen={isRequisitionModalOpen}
         onClose={() => setIsRequisitionModalOpen(false)}
         items={items}
+        employees={employees}
         onSubmit={async (data) => {
           await api.createRequisition(data);
         }}
@@ -583,6 +743,27 @@ export default function App() {
         onSelectAction={(item, action) => {
           handleOpenQuickMovement(item, action);
         }}
+        onQuickQuantityUpdate={async (item, delta) => {
+          await api.submitMovement({
+            itemId: item.id,
+            type: delta > 0 ? 'ENTRADA' : 'SAIDA',
+            quantity: Math.abs(delta),
+            reason: delta > 0 ? 'Entrada Rápida via Scanner Óptico' : 'Baixa Rápida de Balcão via Scanner Óptico',
+            recipient: delta > 0 ? 'Almoxarifado Central' : 'Balcão de Atendimento Rápido',
+            operator: currentProfile.name,
+          });
+        }}
+      />
+
+      <ReportsModal
+        isOpen={isReportsModalOpen}
+        onClose={() => setIsReportsModalOpen(false)}
+        items={items}
+        movements={movements}
+        requisitions={requisitions}
+        employees={employees}
+        operatorName={currentProfile.name}
+        databaseInfo={databaseInfo}
       />
 
       <OperatorProfileModal

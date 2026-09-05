@@ -147,6 +147,10 @@ class RealtimeSocketManager {
     };
   }
 
+  public onStatusChange(listener: StatusListener): () => void {
+    return this.subscribeStatus(listener);
+  }
+
   public disconnect() {
     this.isExplicitClose = true;
     this.stopHeartbeat();

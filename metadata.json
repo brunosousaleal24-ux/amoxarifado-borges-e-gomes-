@@ -1,6 +1,6 @@
 {
   "name": "Almoxarifado em Tempo Real",
   "description": "Sistema de gestão e controle de almoxarifado em tempo real com rastreamento de estoque, movimentações ao vivo e requisições sincronizadas.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

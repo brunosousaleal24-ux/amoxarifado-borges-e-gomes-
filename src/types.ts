@@ -86,6 +86,53 @@ export interface Requisition {
   notes?: string;
 }
 
+export interface Employee {
+  id: string;
+  name: string;
+  registration: string; // Matrícula
+  department: string;   // Setor / Depto
+  role: string;         // Cargo / Função
+  phone?: string;       // Ramal / Celular
+  email?: string;
+  status: 'ATIVO' | 'INATIVO';
+  createdAt: string;
+  notes?: string;
+}
+
+export interface DatabaseInfo {
+  engine: string;
+  filePath: string;
+  status: string;
+  sizeBytes: number;
+  sizeFormatted: string;
+  tables: {
+    items: number;
+    movements: number;
+    requisitions: number;
+    employees: number;
+  };
+}
+
+export type UserRole = 'ADMIN' | 'OPERADOR' | 'ALMOXARIFE' | 'CONSULTA';
+
+export interface SystemUser {
+  id: string;
+  username: string;
+  name: string;
+  role: UserRole;
+  department?: string;
+  email?: string;
+  status: 'ATIVO' | 'BLOQUEADO';
+  createdAt: string;
+  lastLogin?: string;
+  avatarColor?: string;
+}
+
+export interface AuthSession {
+  user: SystemUser;
+  token: string;
+}
+
 export interface ConnectedOperator {
   id: string;
   name: string;
@@ -93,13 +140,18 @@ export interface ConnectedOperator {
   color: string;
   connectedAt: string;
   activeTab?: string;
+  username?: string;
+  isAdmin?: boolean;
 }
 
 export interface RealtimeServerState {
   items: InventoryItem[];
   movements: StockMovement[];
   requisitions: Requisition[];
+  employees: Employee[];
   operators: ConnectedOperator[];
+  database?: DatabaseInfo;
+  databaseInfo?: DatabaseInfo;
   stats: {
     totalItems: number;
     totalStockUnits: number;
@@ -108,6 +160,7 @@ export interface RealtimeServerState {
     lowStockAlertsCount: number;
     movementsTodayCount: number;
     pendingRequisitionsCount: number;
+    totalEmployeesCount: number;
   };
 }
 
@@ -122,5 +175,8 @@ export type WSServerMessage =
   | { type: 'MOVEMENT_CREATED'; payload: { movement: StockMovement; updatedItem: InventoryItem } }
   | { type: 'REQUISITION_CREATED'; payload: Requisition }
   | { type: 'REQUISITION_UPDATED'; payload: { requisition: Requisition; updatedItems?: InventoryItem[] } }
+  | { type: 'EMPLOYEE_CREATED'; payload: Employee }
+  | { type: 'EMPLOYEE_UPDATED'; payload: Employee }
+  | { type: 'EMPLOYEE_DELETED'; payload: string }
   | { type: 'OPERATORS_CHANGED'; payload: ConnectedOperator[] }
   | { type: 'ALERT_BROADCAST'; payload: { title: string; message: string; type: 'warning' | 'error' | 'info' | 'success' } };

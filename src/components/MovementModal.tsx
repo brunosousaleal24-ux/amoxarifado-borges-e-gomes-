@@ -12,14 +12,16 @@ import {
   Hash,
   Building2,
   User,
-  QrCode
+  QrCode,
+  Users
 } from 'lucide-react';
-import { InventoryItem, MovementType } from '../types.ts';
+import { InventoryItem, MovementType, Employee } from '../types.ts';
 
 interface MovementModalProps {
   isOpen: boolean;
   onClose: () => void;
   items: InventoryItem[];
+  employees?: Employee[];
   preSelectedItem?: InventoryItem | null;
   defaultType?: MovementType;
   currentOperator: string;
@@ -40,6 +42,7 @@ export const MovementModal: React.FC<MovementModalProps> = ({
   isOpen,
   onClose,
   items,
+  employees = [],
   preSelectedItem,
   defaultType = 'SAIDA',
   currentOperator,
@@ -338,16 +341,29 @@ export const MovementModal: React.FC<MovementModalProps> = ({
           {/* Recipient / Sector */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                {type === 'SAIDA' ? 'Solicitante / Setor' : 'Origem / Fornecedor'}
-              </label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                  {type === 'SAIDA' ? 'Solicitante / Setor' : 'Origem / Fornecedor'}
+                </label>
+                {type === 'SAIDA' && employees.length > 0 && (
+                  <span className="text-[10px] text-blue-400 font-medium">
+                    {employees.filter(e => e.status === 'ATIVO').length} funcionários cadastrados
+                  </span>
+                )}
+              </div>
               <input
                 type="text"
-                placeholder="Ex: Carlos (Manutenção), Obra 02..."
+                list="registered-employees-list"
+                placeholder={type === 'SAIDA' ? "Selecione o funcionário ou digite..." : "Ex: NF Fornecedor..."}
                 value={recipient}
                 onChange={(e) => setRecipient(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-amber-500"
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white focus:outline-hidden focus:border-amber-500"
               />
+              <datalist id="registered-employees-list">
+                {employees.map((emp) => (
+                  <option key={emp.id} value={`${emp.name} (${emp.registration} - ${emp.department})`} />
+                ))}
+              </datalist>
             </div>
 
             <div>

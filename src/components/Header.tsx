@@ -11,19 +11,29 @@ import {
   UserCheck, 
   Sparkles,
   RefreshCw,
-  Bell
+  Bell,
+  FileSpreadsheet,
+  Database,
+  Crown,
+  LogOut,
+  KeyRound,
+  ShieldCheck
 } from 'lucide-react';
-import { ConnectedOperator } from '../types.ts';
+import { ConnectedOperator, SystemUser } from '../types.ts';
 
 interface HeaderProps {
   connectionStatus: 'connected' | 'connecting' | 'disconnected';
   latencyMs: number;
   operators: ConnectedOperator[];
   currentProfile: { name: string; role: string; color: string };
+  currentUser: SystemUser;
+  onLogout: () => void;
+  onChangePassword: () => void;
   onOpenMovementModal: () => void;
   onOpenNewItemModal: () => void;
   onOpenRequisitionModal: () => void;
   onOpenScannerModal: () => void;
+  onOpenReportsModal: () => void;
   onOpenProfileModal: () => void;
   unreadAlertsCount: number;
   onOpenAlertsTab: () => void;
@@ -34,14 +44,21 @@ export const Header: React.FC<HeaderProps> = ({
   latencyMs,
   operators,
   currentProfile,
+  currentUser,
+  onLogout,
+  onChangePassword,
   onOpenMovementModal,
   onOpenNewItemModal,
   onOpenRequisitionModal,
   onOpenScannerModal,
+  onOpenReportsModal,
   onOpenProfileModal,
   unreadAlertsCount,
   onOpenAlertsTab,
 }) => {
+  const isAdmin = currentUser.role === 'ADMIN';
+  const isReadOnly = currentUser.role === 'CONSULTA';
+
   return (
     <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md sticky top-0 z-30 px-4 lg:px-8 py-3.5 shadow-sm">
       <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -59,6 +76,13 @@ export const Header: React.FC<HeaderProps> = ({
                   Tempo Real
                 </span>
               </h1>
+
+              {isAdmin && (
+                <span className="hidden sm:inline-flex items-center gap-1 text-[11px] font-extrabold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                  <Crown className="w-3 h-3 text-amber-400" />
+                  Acesso Total
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-3 text-xs text-slate-400 mt-0.5">
               {/* WebSocket Indicator */}
@@ -93,12 +117,20 @@ export const Header: React.FC<HeaderProps> = ({
               <div 
                 onClick={onOpenProfileModal}
                 className="cursor-pointer hover:text-slate-200 transition-colors flex items-center gap-1.5 bg-slate-800/80 px-2 py-0.5 rounded-md border border-slate-700/60"
-                title="Clique para gerenciar seu perfil de operador"
+                title="Visualizar operadores ativos"
               >
                 <Users className="w-3.5 h-3.5 text-sky-400" />
                 <span>
                   <strong className="text-slate-200 font-semibold">{operators.length || 1}</strong> online
                 </span>
+              </div>
+
+              <span className="text-slate-700">•</span>
+
+              {/* Database persistence badge */}
+              <div className="flex items-center gap-1 text-[11px] text-emerald-400 bg-emerald-950/40 border border-emerald-500/30 px-2 py-0.5 rounded-md" title="Banco de dados SQLite WAL ativo e persistente">
+                <Database className="w-3 h-3 text-emerald-400" />
+                <span>SQLite DB</span>
               </div>
             </div>
           </div>
@@ -106,11 +138,22 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Right: Quick Actions & Operator Profile */}
         <div className="flex items-center flex-wrap gap-2.5">
+          {/* Reports generator button */}
+          <button
+            id="btn-open-reports"
+            onClick={onOpenReportsModal}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 text-xs font-semibold transition-all shadow-sm active:scale-95 cursor-pointer"
+            title="Gerar Relatórios em PDF e Excel (.xlsx)"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+            <span>Relatórios PDF/Excel</span>
+          </button>
+
           {/* Barcode scanner button */}
           <button
             id="btn-scan-barcode"
             onClick={onOpenScannerModal}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 text-xs font-semibold transition-all shadow-sm active:scale-95"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 text-xs font-semibold transition-all shadow-sm active:scale-95 cursor-pointer"
             title="Abrir Leitor de Código de Barras / QR Code"
           >
             <QrCode className="w-4 h-4 text-amber-400" />
@@ -118,41 +161,47 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
 
           {/* New Requisition button */}
-          <button
-            id="btn-new-requisition"
-            onClick={onOpenRequisitionModal}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 text-xs font-semibold transition-all shadow-sm active:scale-95"
-          >
-            <FileText className="w-4 h-4 text-sky-400" />
-            <span>+ Requisição</span>
-          </button>
+          {!isReadOnly && (
+            <button
+              id="btn-new-requisition"
+              onClick={onOpenRequisitionModal}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 text-xs font-semibold transition-all shadow-sm active:scale-95"
+            >
+              <FileText className="w-4 h-4 text-sky-400" />
+              <span>+ Requisição</span>
+            </button>
+          )}
 
-          {/* New Item button */}
-          <button
-            id="btn-new-item"
-            onClick={onOpenNewItemModal}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 text-xs font-semibold transition-all shadow-sm active:scale-95"
-          >
-            <Plus className="w-4 h-4 text-emerald-400" />
-            <span>Novo Item</span>
-          </button>
+          {/* New Item button (Almoxarife or Admin) */}
+          {!isReadOnly && (
+            <button
+              id="btn-new-item"
+              onClick={onOpenNewItemModal}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 text-xs font-semibold transition-all shadow-sm active:scale-95"
+            >
+              <Plus className="w-4 h-4 text-emerald-400" />
+              <span>Novo Item</span>
+            </button>
+          )}
 
           {/* Quick Movement Button (Entrada / Saída) */}
-          <button
-            id="btn-quick-movement"
-            onClick={onOpenMovementModal}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs transition-all shadow-md shadow-amber-500/20 active:scale-95"
-          >
-            <ArrowDownToLine className="w-4 h-4" />
-            <span>Movimentar Estoque</span>
-          </button>
+          {!isReadOnly && (
+            <button
+              id="btn-quick-movement"
+              onClick={onOpenMovementModal}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs transition-all shadow-md shadow-amber-500/20 active:scale-95 cursor-pointer"
+            >
+              <ArrowDownToLine className="w-4 h-4" />
+              <span>Movimentar Estoque</span>
+            </button>
+          )}
 
           {/* Stock Alerts button with badge */}
           {unreadAlertsCount > 0 && (
             <button
               id="btn-view-alerts"
               onClick={onOpenAlertsTab}
-              className="relative p-2 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 transition-all active:scale-95"
+              className="relative p-2 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 transition-all active:scale-95 cursor-pointer"
               title={`${unreadAlertsCount} itens em alerta de estoque`}
             >
               <Bell className="w-4 h-4 animate-bounce" />
@@ -162,21 +211,46 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* Operator Profile pill */}
-          <div 
-            onClick={onOpenProfileModal}
-            className="cursor-pointer flex items-center gap-2 pl-2 pr-3 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-xs transition-colors ml-1"
-          >
+          {/* User Profile Pill & Actions */}
+          <div className="flex items-center gap-1.5 bg-slate-800/90 border border-slate-700/80 rounded-xl p-1 pl-2">
             <div 
-              className="w-6 h-6 rounded-full flex items-center justify-center font-bold text-[11px] text-white shadow"
-              style={{ backgroundColor: currentProfile.color }}
+              onClick={onOpenProfileModal}
+              className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+              title={`Conectado como: ${currentUser.name} (@${currentUser.username})`}
             >
-              {currentProfile.name.charAt(0).toUpperCase()}
+              <div 
+                className="w-7 h-7 rounded-lg flex items-center justify-center font-bold text-xs text-white shadow"
+                style={{ backgroundColor: currentUser.avatarColor || (isAdmin ? '#f59e0b' : '#3b82f6') }}
+              >
+                {currentUser.name.charAt(0).toUpperCase()}
+              </div>
+              <div className="text-left leading-tight hidden lg:block pr-1">
+                <p className="font-bold text-slate-100 text-xs max-w-[120px] truncate">{currentUser.name}</p>
+                <p className="text-[10px] text-amber-400 font-semibold truncate flex items-center gap-1">
+                  {isAdmin ? '👑 ADMIN TOTAL' : currentUser.role}
+                </p>
+              </div>
             </div>
-            <div className="text-left leading-tight hidden sm:block">
-              <p className="font-semibold text-slate-200 max-w-[110px] truncate">{currentProfile.name}</p>
-              <p className="text-[10px] text-slate-400 truncate">{currentProfile.role}</p>
-            </div>
+
+            {/* Change Password Button */}
+            <button
+              id="btn-change-password-header"
+              onClick={onChangePassword}
+              className="p-1.5 text-slate-400 hover:text-amber-400 hover:bg-slate-700/60 rounded-lg transition-colors cursor-pointer"
+              title="Alterar Minha Senha"
+            >
+              <KeyRound className="w-3.5 h-3.5" />
+            </button>
+
+            {/* Logout Button */}
+            <button
+              id="btn-logout-header"
+              onClick={onLogout}
+              className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-700/60 rounded-lg transition-colors cursor-pointer"
+              title="Sair do Sistema (Logout)"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+            </button>
           </div>
 
         </div>

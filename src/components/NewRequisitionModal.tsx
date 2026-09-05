@@ -11,12 +11,13 @@ import {
   User, 
   Hash 
 } from 'lucide-react';
-import { InventoryItem, RequisitionPriority } from '../types.ts';
+import { InventoryItem, RequisitionPriority, Employee } from '../types.ts';
 
 interface NewRequisitionModalProps {
   isOpen: boolean;
   onClose: () => void;
   items: InventoryItem[];
+  employees?: Employee[];
   onSubmit: (data: {
     requesterName: string;
     department: string;
@@ -31,6 +32,7 @@ export const NewRequisitionModal: React.FC<NewRequisitionModalProps> = ({
   isOpen,
   onClose,
   items,
+  employees = [],
   onSubmit,
 }) => {
   const [requesterName, setRequesterName] = useState('');
@@ -133,36 +135,51 @@ export const NewRequisitionModal: React.FC<NewRequisitionModalProps> = ({
           {/* Requester & Department */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                Nome do Solicitante *
-              </label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                  Nome do Solicitante *
+                </label>
+                {employees.length > 0 && (
+                  <span className="text-[10px] text-sky-400 font-medium">
+                    {employees.length} cadastrados
+                  </span>
+                )}
+              </div>
               <input
                 type="text"
+                list="req-employees-list"
                 required
                 value={requesterName}
-                onChange={(e) => setRequesterName(e.target.value)}
-                placeholder="Ex: Roberto Silva"
-                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-sky-500"
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setRequesterName(val);
+                  const matched = employees.find(emp => `${emp.name} (${emp.registration})` === val || emp.name === val);
+                  if (matched) {
+                    setDepartment(matched.department);
+                  }
+                }}
+                placeholder="Selecione funcionário ou digite..."
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white focus:outline-hidden focus:border-sky-500"
               />
+              <datalist id="req-employees-list">
+                {employees.map(emp => (
+                  <option key={emp.id} value={`${emp.name} (${emp.registration})`} />
+                ))}
+              </datalist>
             </div>
 
             <div>
               <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
                 Setor / Equipe *
               </label>
-              <select
-                aria-label="Selecionar setor ou equipe"
+              <input
+                type="text"
+                required
                 value={department}
                 onChange={(e) => setDepartment(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-sky-500"
-              >
-                <option value="Manutenção Mecânica">Manutenção Mecânica</option>
-                <option value="Manutenção Elétrica">Manutenção Elétrica</option>
-                <option value="Produção & Operação">Produção & Operação</option>
-                <option value="Obras & Infraestrutura">Obras & Infraestrutura</option>
-                <option value="Segurança SESMT">Segurança SESMT</option>
-                <option value="Logística & Frotas">Logística & Frotas</option>
-              </select>
+                placeholder="Ex: Manutenção Elétrica, Obras..."
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white focus:outline-hidden focus:border-sky-500"
+              />
             </div>
           </div>
 
