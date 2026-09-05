@@ -27,7 +27,8 @@ import {
   MovementType,
   WSServerMessage,
   Employee,
-  DatabaseInfo
+  DatabaseInfo,
+  SystemUser
 } from './types.ts';
 import { socketManager } from './services/socket.ts';
 import * as api from './services/api.ts';
@@ -42,6 +43,8 @@ import { RequisitionsQueue } from './components/RequisitionsQueue.tsx';
 import { WarehouseMap } from './components/WarehouseMap.tsx';
 import { RestockAlerts } from './components/RestockAlerts.tsx';
 import { EmployeesManagement } from './components/EmployeesManagement.tsx';
+import { UsersManagement } from './components/UsersManagement.tsx';
+import { LoginScreen } from './components/LoginScreen.tsx';
 
 // Modals
 import { MovementModal } from './components/MovementModal.tsx';
@@ -51,6 +54,14 @@ import { BarcodeScannerModal } from './components/BarcodeScannerModal.tsx';
 import { OperatorProfileModal } from './components/OperatorProfileModal.tsx';
 import { ReceiptModal } from './components/ReceiptModal.tsx';
 import { ReportsModal } from './components/ReportsModal.tsx';
+import { ChangePasswordModal } from './components/ChangePasswordModal.tsx';
+import { FirebaseModal } from './components/FirebaseModal.tsx';
+import { 
+  syncItemToFirebase, 
+  syncMovementToFirebase, 
+  syncRequisitionToFirebase, 
+  syncEmployeeToFirebase 
+} from './services/firebaseSync.ts';
 
 interface LiveToast {
   id: string;
@@ -61,7 +72,13 @@ interface LiveToast {
 
 export default function App() {
   // Navigation tabs
-  const [activeTab, setActiveTab] = useState<'ESTOQUE' | 'FEED' | 'REQUISICOES' | 'MAPA' | 'ALERTAS' | 'FUNCIONARIOS'>('ESTOQUE');
+  const [activeTab, setActiveTab] = useState<'ESTOQUE' | 'FEED' | 'REQUISICOES' | 'MAPA' | 'ALERTAS' | 'FUNCIONARIOS' | 'USUARIOS'>('ESTOQUE');
+
+  // Authentication & current user session
+  const [currentUser, setCurrentUser] = useState<SystemUser | null>(null);
+  const [isAuthChecking, setIsAuthChecking] = useState(true);
+  const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
+  const [isFirebaseModalOpen, setIsFirebaseModalOpen] = useState(false);
 
   // Real-time server state & database entities
   const [items, setItems] = useState<InventoryItem[]>([]);
@@ -137,6 +154,31 @@ export default function App() {
     });
   }, []);
 
+  // Initial auth verification
+  useEffect(() => {
+    async function verifyAuth() {
+      try {
+        const user = await api.fetchCurrentUser();
+        if (user) {
+          setCurrentUser(user);
+          socketManager.setProfile({
+            name: user.name,
+            role: user.role,
+            color: user.role === 'ADMIN' ? '#f59e0b' : '#3b82f6',
+            username: user.username,
+            isAdmin: user.role === 'ADMIN'
+          });
+          setCurrentProfile(socketManager.getProfile());
+        }
+      } catch (err) {
+        console.error('Falha ao checar credenciais salvas:', err);
+      } finally {
+        setIsAuthChecking(false);
+      }
+    }
+    verifyAuth();
+  }, []);
+
   // Initialize WebSockets and load initial database state
   useEffect(() => {
     socketManager.connect();
@@ -164,6 +206,7 @@ export default function App() {
         }
 
         case 'ITEM_CREATED': {
+          syncItemToFirebase(msg.payload);
           setItems((prev) => {
             const exists = prev.some(i => i.id === msg.payload.id);
             if (exists) return prev;
@@ -180,6 +223,7 @@ export default function App() {
         }
 
         case 'ITEM_UPDATED': {
+          syncItemToFirebase(msg.payload);
           setItems((prev) => {
             const updated = prev.map(i => i.id === msg.payload.id ? msg.payload : i);
             recomputeStats(updated, movements, requisitions);
@@ -190,6 +234,8 @@ export default function App() {
 
         case 'MOVEMENT_CREATED': {
           const { movement, updatedItem } = msg.payload;
+          syncMovementToFirebase(movement);
+          if (updatedItem) syncItemToFirebase(updatedItem);
           setMovements((prev) => {
             const exists = prev.some(m => m.id === movement.id);
             if (exists) return prev;
@@ -210,6 +256,7 @@ export default function App() {
         }
 
         case 'REQUISITION_CREATED': {
+          syncRequisitionToFirebase(msg.payload);
           setRequisitions((prev) => {
             const exists = prev.some(r => r.id === msg.payload.id);
             if (exists) return prev;
@@ -227,6 +274,7 @@ export default function App() {
 
         case 'REQUISITION_UPDATED': {
           const { requisition, updatedItems } = msg.payload;
+          syncRequisitionToFirebase(requisition);
           setRequisitions((prev) => {
             const updated = prev.map(r => r.id === requisition.id ? requisition : r);
             recomputeStats(items, movements, updated);
@@ -247,6 +295,7 @@ export default function App() {
         }
 
         case 'EMPLOYEE_CREATED': {
+          syncEmployeeToFirebase(msg.payload);
           setEmployees((prev) => {
             if (prev.some(e => e.id === msg.payload.id)) return prev;
             return [msg.payload, ...prev];
@@ -260,6 +309,7 @@ export default function App() {
         }
 
         case 'EMPLOYEE_UPDATED': {
+          syncEmployeeToFirebase(msg.payload);
           setEmployees((prev) => prev.map(e => e.id === msg.payload.id ? msg.payload : e));
           addToast({
             title: 'Funcionário Atualizado',
@@ -447,6 +497,79 @@ export default function App() {
     }
   };
 
+  const handleLoginSuccess = (user: SystemUser) => {
+    setCurrentUser(user);
+    socketManager.setProfile({
+      name: user.name,
+      role: user.role,
+      color: user.role === 'ADMIN' ? '#f59e0b' : '#3b82f6',
+      username: user.username,
+      isAdmin: user.role === 'ADMIN'
+    });
+    setCurrentProfile(socketManager.getProfile());
+    addToast({
+      title: `Bem-vindo, ${user.name}!`,
+      message: user.role === 'ADMIN'
+        ? 'Acesso Total de Administrador liberado (gerenciamento de colaboradores, senhas e catálogo).'
+        : 'Sessão iniciada no Almoxarifado em Tempo Real.',
+      type: 'success'
+    });
+  };
+
+  const handleLogout = async () => {
+    await api.logoutUser();
+    setCurrentUser(null);
+    addToast({
+      title: 'Sessão Finalizada',
+      message: 'Você saiu com segurança do sistema.',
+      type: 'info'
+    });
+  };
+
+  const handleDeleteItem = async (item: InventoryItem) => {
+    if (currentUser?.role !== 'ADMIN') {
+      addToast({
+        title: 'Acesso Negado',
+        message: 'Apenas o Administrador possui permissão para excluir itens do catálogo.',
+        type: 'error'
+      });
+      return;
+    }
+
+    if (!window.confirm(`Tem certeza que deseja excluir o item "${item.name}" (${item.sku}) do almoxarifado? Esta ação removerá o produto do catálogo.`)) {
+      return;
+    }
+
+    try {
+      await api.deleteItem(item.id);
+      setItems(prev => prev.filter(i => i.id !== item.id));
+      addToast({
+        title: 'Item Removido',
+        message: `O item "${item.name}" foi excluído do catálogo pelo administrador.`,
+        type: 'warning'
+      });
+    } catch (err: any) {
+      addToast({
+        title: 'Erro ao Remover Item',
+        message: err.message || 'Falha ao excluir item.',
+        type: 'error'
+      });
+    }
+  };
+
+  if (isAuthChecking) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-300">
+        <div className="w-10 h-10 border-3 border-amber-500 border-t-transparent rounded-full animate-spin mb-4" />
+        <p className="text-sm font-medium tracking-wide">Carregando Almoxarifado em Tempo Real...</p>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-amber-500 selection:text-slate-950">
       
@@ -456,12 +579,16 @@ export default function App() {
         latencyMs={latencyMs}
         operators={operators}
         currentProfile={currentProfile}
+        currentUser={currentUser}
+        onLogout={handleLogout}
+        onChangePassword={() => setIsChangePasswordModalOpen(true)}
         onOpenMovementModal={handleOpenBlankMovement}
         onOpenNewItemModal={handleOpenNewItem}
         onOpenRequisitionModal={() => setIsRequisitionModalOpen(true)}
         onOpenScannerModal={() => setIsScannerModalOpen(true)}
         onOpenReportsModal={() => setIsReportsModalOpen(true)}
         onOpenProfileModal={() => setIsProfileModalOpen(true)}
+        onOpenFirebaseModal={() => setIsFirebaseModalOpen(true)}
         unreadAlertsCount={stats.criticalAlertsCount + stats.lowStockAlertsCount}
         onOpenAlertsTab={() => setActiveTab('ALERTAS')}
       />
@@ -585,6 +712,25 @@ export default function App() {
               )}
             </button>
 
+            {/* Tab 7: Usuários & Senhas (Exclusivo Administrador com Acesso Total) */}
+            {currentUser.role === 'ADMIN' && (
+              <button
+                id="tab-users-management"
+                onClick={() => setActiveTab('USUARIOS')}
+                className={`flex items-center gap-2 px-3.5 py-2.5 border-b-2 font-bold text-xs sm:text-sm whitespace-nowrap transition-all cursor-pointer ${
+                  activeTab === 'USUARIOS'
+                    ? 'border-purple-500 text-purple-400 bg-purple-500/5'
+                    : 'border-transparent text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                }`}
+              >
+                <ShieldCheck className="w-4 h-4 text-purple-400" />
+                <span>Usuários & Senhas</span>
+                <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-purple-900/60 text-purple-300 border border-purple-500/30">
+                  ADMIN
+                </span>
+              </button>
+            )}
+
           </div>
         </div>
 
@@ -595,9 +741,12 @@ export default function App() {
               <InventoryAnalytics items={items} movements={movements} />
               <InventoryTable
                 items={items}
+                isAdmin={currentUser.role === 'ADMIN'}
+                isReadOnly={currentUser.role === 'CONSULTA'}
                 onQuickMovement={handleOpenQuickMovement}
                 onEditItem={handleEditItem}
                 onViewItemHistory={handleViewItemHistory}
+                onDeleteItem={handleDeleteItem}
               />
             </div>
           )}
@@ -650,6 +799,10 @@ export default function App() {
                 handleOpenQuickMovement(item, 'ENTRADA', suggestedQty);
               }}
             />
+          )}
+
+          {activeTab === 'USUARIOS' && currentUser.role === 'ADMIN' && (
+            <UsersManagement currentUser={currentUser} />
           )}
         </div>
 
@@ -781,6 +934,25 @@ export default function App() {
           setReceiptMovement(null);
         }}
         movement={receiptMovement}
+      />
+
+      {currentUser && (
+        <ChangePasswordModal
+          user={currentUser}
+          isOpen={isChangePasswordModalOpen}
+          onClose={() => setIsChangePasswordModalOpen(false)}
+          onSuccessToast={(msg) => addToast({ title: 'Senha Atualizada', message: msg, type: 'success' })}
+        />
+      )}
+
+      <FirebaseModal
+        isOpen={isFirebaseModalOpen}
+        onClose={() => setIsFirebaseModalOpen(false)}
+        items={items}
+        movements={movements}
+        requisitions={requisitions}
+        employees={employees}
+        onShowToast={(title, message, type) => addToast({ title, message, type })}
       />
 
     </div>

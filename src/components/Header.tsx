@@ -17,7 +17,9 @@ import {
   Crown,
   LogOut,
   KeyRound,
-  ShieldCheck
+  ShieldCheck,
+  Flame,
+  Cloud
 } from 'lucide-react';
 import { ConnectedOperator, SystemUser } from '../types.ts';
 
@@ -35,6 +37,7 @@ interface HeaderProps {
   onOpenScannerModal: () => void;
   onOpenReportsModal: () => void;
   onOpenProfileModal: () => void;
+  onOpenFirebaseModal: () => void;
   unreadAlertsCount: number;
   onOpenAlertsTab: () => void;
 }
@@ -53,6 +56,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenScannerModal,
   onOpenReportsModal,
   onOpenProfileModal,
+  onOpenFirebaseModal,
   unreadAlertsCount,
   onOpenAlertsTab,
 }) => {
@@ -132,12 +136,36 @@ export const Header: React.FC<HeaderProps> = ({
                 <Database className="w-3 h-3 text-emerald-400" />
                 <span>SQLite DB</span>
               </div>
+
+              <span className="text-slate-700">•</span>
+
+              {/* Firebase Cloud badge */}
+              <button
+                id="badge-firebase-cloud"
+                onClick={onOpenFirebaseModal}
+                className="flex items-center gap-1 text-[11px] text-amber-400 bg-amber-950/40 hover:bg-amber-900/40 border border-amber-500/30 px-2 py-0.5 rounded-md transition-colors cursor-pointer"
+                title="Configurações e Sincronização Firebase Firestore (almoxarido-borges-e-gomes)"
+              >
+                <Flame className="w-3 h-3 text-amber-400" />
+                <span>Firebase Cloud</span>
+              </button>
             </div>
           </div>
         </div>
 
         {/* Right: Quick Actions & Operator Profile */}
         <div className="flex items-center flex-wrap gap-2.5">
+          {/* Firebase Cloud Sync button */}
+          <button
+            id="btn-open-firebase"
+            onClick={onOpenFirebaseModal}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 hover:text-amber-200 border border-amber-500/30 text-xs font-semibold transition-all shadow-sm active:scale-95 cursor-pointer"
+            title="Sincronização em Nuvem e Status Firebase"
+          >
+            <Flame className="w-4 h-4 text-amber-400" />
+            <span>Firebase</span>
+          </button>
+
           {/* Reports generator button */}
           <button
             id="btn-open-reports"

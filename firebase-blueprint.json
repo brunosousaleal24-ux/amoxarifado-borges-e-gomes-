@@ -1,0 +1,128 @@
+{
+  "entities": {
+    "Item": {
+      "title": "Item",
+      "description": "Item em estoque no almoxarifado",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "sku": { "type": "string", "maxLength": 64 },
+        "name": { "type": "string", "maxLength": 200 },
+        "category": { "type": "string", "maxLength": 100 },
+        "unit": { "type": "string", "maxLength": 20 },
+        "currentStock": { "type": "number" },
+        "minStock": { "type": "number" },
+        "maxStock": { "type": "number" },
+        "reorderPoint": { "type": "number" },
+        "unitCost": { "type": "number" },
+        "barcode": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["ok", "baixo", "critico"] },
+        "supplier": { "type": "string", "maxLength": 150 },
+        "description": { "type": "string", "maxLength": 500 },
+        "lastUpdated": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "sku", "name", "category", "unit", "currentStock"]
+    },
+    "Movement": {
+      "title": "Movement",
+      "description": "Registro de movimentação de estoque",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "itemId": { "type": "string", "maxLength": 128 },
+        "itemSku": { "type": "string", "maxLength": 64 },
+        "itemName": { "type": "string", "maxLength": 200 },
+        "category": { "type": "string", "maxLength": 100 },
+        "type": { "type": "string", "enum": ["ENTRADA", "SAIDA", "AJUSTE", "DEVOLUCAO"] },
+        "quantity": { "type": "number" },
+        "unit": { "type": "string", "maxLength": 20 },
+        "previousStock": { "type": "number" },
+        "newStock": { "type": "number" },
+        "reason": { "type": "string", "maxLength": 300 },
+        "recipient": { "type": "string", "maxLength": 150 },
+        "operator": { "type": "string", "maxLength": 150 },
+        "operatorRole": { "type": "string", "maxLength": 100 },
+        "timestamp": { "type": "string", "maxLength": 64 },
+        "unitCost": { "type": "number" },
+        "totalCost": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 500 }
+      },
+      "required": ["id", "itemId", "itemSku", "itemName", "type", "quantity", "timestamp"]
+    },
+    "Requisition": {
+      "title": "Requisition",
+      "description": "Requisição interna de materiais",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "code": { "type": "string", "maxLength": 64 },
+        "requesterName": { "type": "string", "maxLength": 150 },
+        "department": { "type": "string", "maxLength": 150 },
+        "workOrder": { "type": "string", "maxLength": 100 },
+        "priority": { "type": "string", "enum": ["BAIXA", "NORMAL", "ALTA", "URGENTE"] },
+        "status": { "type": "string", "enum": ["PENDENTE", "ATENDIDA", "CANCELADA"] },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 },
+        "notes": { "type": "string", "maxLength": 500 }
+      },
+      "required": ["id", "code", "requesterName", "department", "priority", "status", "createdAt"]
+    },
+    "Employee": {
+      "title": "Employee",
+      "description": "Colaborador ou funcionário da empresa",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 150 },
+        "registration": { "type": "string", "maxLength": 64 },
+        "department": { "type": "string", "maxLength": 150 },
+        "role": { "type": "string", "maxLength": 150 },
+        "phone": { "type": "string", "maxLength": 50 },
+        "email": { "type": "string", "maxLength": 150 },
+        "status": { "type": "string", "enum": ["ATIVO", "INATIVO", "AFASTADO"] },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "notes": { "type": "string", "maxLength": 500 }
+      },
+      "required": ["id", "name", "registration", "department", "role", "status"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Usuário autenticado do sistema de almoxarifado",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "username": { "type": "string", "maxLength": 64 },
+        "name": { "type": "string", "maxLength": 150 },
+        "role": { "type": "string", "enum": ["ADMIN", "OPERADOR", "CONSULTA"] },
+        "department": { "type": "string", "maxLength": 150 },
+        "email": { "type": "string", "maxLength": 150 },
+        "status": { "type": "string", "enum": ["ATIVO", "BLOQUEADO"] },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "avatarColor": { "type": "string", "maxLength": 30 }
+      },
+      "required": ["id", "username", "name", "role", "status"]
+    }
+  },
+  "firestore": {
+    "/items/{itemId}": {
+      "schema": { "$ref": "#/entities/Item" },
+      "description": "Catálogo de itens e materiais de estoque do almoxarifado"
+    },
+    "/movements/{movementId}": {
+      "schema": { "$ref": "#/entities/Movement" },
+      "description": "Movimentações de entrada, saída e devolução"
+    },
+    "/requisitions/{requisitionId}": {
+      "schema": { "$ref": "#/entities/Requisition" },
+      "description": "Requisições de materiais e EPIs"
+    },
+    "/employees/{employeeId}": {
+      "schema": { "$ref": "#/entities/Employee" },
+      "description": "Cadastro e controle de funcionários"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Usuários do sistema e permissões"
+    }
+  }
+}

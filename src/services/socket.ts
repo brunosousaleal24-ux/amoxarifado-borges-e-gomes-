@@ -12,7 +12,7 @@ class RealtimeSocketManager {
   private lastPingSentAt: number = 0;
   private latencyMs: number = 24;
   private isExplicitClose: boolean = false;
-  private operatorProfile: { name: string; role: string; color: string } = {
+  private operatorProfile: { name: string; role: string; color: string; username?: string; isAdmin?: boolean } = {
     name: 'Almoxarife Principal',
     role: 'Almoxarife Chefe',
     color: '#3b82f6',
@@ -34,7 +34,7 @@ class RealtimeSocketManager {
     return this.operatorProfile;
   }
 
-  public setProfile(profile: { name: string; role: string; color: string }) {
+  public setProfile(profile: { name: string; role: string; color: string; username?: string; isAdmin?: boolean }) {
     this.operatorProfile = profile;
     try {
       localStorage.setItem('almoxarifado_operator', JSON.stringify(profile));
